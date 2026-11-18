@@ -1,0 +1,340 @@
+<title>HUD Desk Preview</title>
+<meta name="claude:viewport-fit-sides" content="cover">
+<link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=Saira+Semi+Condensed:wght@500;600;700&family=IBM+Plex+Sans:wght@400;500;600&family=IBM+Plex+Mono:wght@400;500&display=swap">
+<style>
+/* Layout: tabs, the HUD canvas, transport, then (Drive story) an iDrive menu mock, the car state and the event log; then stats, palette and the calls of the current frame. Single dark look on purpose, like the HUD. */
+:root {
+  --bg: #0b0d0f; --panel: #13171a; --panel2: #1a1f23; --line: #262c31; --fg: #e6e9eb; --muted: #8b949b; --accent: #2f86d6;
+  --comfort: #9fb4c7; --sport: #f0262e; --sportplus: #ff6a1f; --eco: #2f9bd6;
+  --display: "Saira Semi Condensed", "Arial Narrow", system-ui, sans-serif;
+  --body: "IBM Plex Sans", system-ui, -apple-system, sans-serif;
+  --mono: "IBM Plex Mono", ui-monospace, Menlo, monospace;
+  color-scheme: dark;
+}
+* { box-sizing: border-box; }
+body { background: var(--bg); color: var(--fg); font: 15px/1.5 var(--body);
+  padding-left: max(16px, env(safe-area-inset-left, 0px)); padding-right: max(16px, env(safe-area-inset-right, 0px)); padding-block: 0 40px; }
+.wrap { max-width: 1080px; margin: 0 auto; display: grid; gap: 18px; }
+header { padding-top: 32px; display: grid; gap: 8px; }
+h1 { font: 700 clamp(28px, 4.5vw, 40px)/1.05 var(--display); margin: 0; }
+h2 { font: 600 19px var(--display); margin: 0 0 8px; }
+p { margin: 0; color: var(--muted); max-width: 74ch; }
+p b { color: var(--fg); font-weight: 500; }
+code { font: 13px var(--mono); }
+.tabs { display: flex; gap: 4px; border-bottom: 1px solid var(--line); flex-wrap: wrap; }
+.tabs button { font: 600 15px var(--display); letter-spacing: .02em; color: var(--muted); background: none; border: 0; border-bottom: 2px solid transparent; padding: 8px 14px; cursor: pointer; }
+.tabs button[aria-selected="true"] { color: var(--fg); border-bottom-color: var(--accent); }
+canvas { display: block; width: 100%; max-width: 100%; aspect-ratio: 480 / 180; background: #000; border-radius: 8px; border: 1px solid var(--line); }
+.bar { display: flex; flex-wrap: wrap; gap: 10px 16px; align-items: center; }
+button, select { font: 500 13px var(--body); color: var(--fg); background: var(--panel); border: 1px solid var(--line); border-radius: 6px; padding: 7px 12px; cursor: pointer; }
+button:focus-visible, select:focus-visible, input:focus-visible, li:focus-visible { outline: 2px solid var(--accent); outline-offset: 2px; }
+input[type=range] { flex: 1 1 220px; min-width: 0; accent-color: var(--accent); }
+.story { display: grid; grid-template-columns: minmax(0, 1fr) minmax(0, 1.25fr); gap: 18px; }
+@media (max-width: 760px) { .story { grid-template-columns: 1fr; } }
+.idrive { background: linear-gradient(#1d2328, #14181b); border: 1px solid #2c343a; border-radius: 10px; padding: 14px 16px; display: grid; gap: 10px; }
+.idrive .crumb { font: 500 11px var(--body); letter-spacing: .08em; text-transform: uppercase; color: var(--muted); }
+.idrive .title { font: 600 20px var(--display); }
+.idrive .status { font: 13px var(--mono); color: #cfe3f5; background: #0f1418; border: 1px solid #22303a; border-radius: 6px; padding: 7px 10px; min-height: 2.6em; }
+.idrive .status .why { display: block; color: #ffc21a; }
+.idrive ul { list-style: none; margin: 0; padding: 0; display: grid; gap: 2px; }
+.idrive li { display: flex; align-items: center; gap: 10px; padding: 7px 8px; border-radius: 6px; font-size: 15px; }
+.idrive li.sub { padding-left: 34px; }
+.idrive li.flash { background: #24476a; transition: background .2s; }
+.idrive li.off { color: #6c757c; }
+.box { width: 18px; height: 18px; border: 2px solid #8fa3b3; border-radius: 3px; display: grid; place-items: center; flex: none; }
+.box.on::after { content: ""; width: 9px; height: 5px; border-left: 2px solid #fff; border-bottom: 2px solid #fff; transform: rotate(-45deg) translate(1px, -1px); }
+.car { display: grid; gap: 10px; align-content: start; }
+.chips { display: flex; flex-wrap: wrap; gap: 8px; }
+.chip { font: 600 13px var(--body); padding: 5px 10px; border-radius: 999px; border: 1px solid var(--line); background: var(--panel); color: var(--muted); }
+.chip.mode { color: #0b0d0f; }
+.chip.on { color: var(--fg); border-color: #3b4650; }
+.log { list-style: none; margin: 0; padding: 0; max-height: 300px; overflow: auto; border: 1px solid var(--line); border-radius: 8px; }
+.log li { display: grid; grid-template-columns: 4.5em minmax(0, 1fr); gap: 8px; padding: 7px 10px; border-bottom: 1px solid var(--line); font-size: 13.5px; cursor: pointer; color: var(--muted); }
+.log li span { font: 12px var(--mono); }
+.log li.past { color: var(--fg); }
+.log li.now { background: #16283a; color: var(--fg); }
+.stats { display: grid; grid-template-columns: repeat(auto-fit, minmax(120px, 1fr)); gap: 10px; }
+.stat { background: var(--panel); border: 1px solid var(--line); border-radius: 8px; padding: 10px 12px; min-width: 0; }
+.stat span { display: block; font-size: 11px; letter-spacing: .07em; text-transform: uppercase; color: var(--muted); }
+.stat b { font: 500 19px var(--mono); font-variant-numeric: tabular-nums; }
+.grid2 { display: grid; grid-template-columns: repeat(auto-fit, minmax(min(100%, 380px), 1fr)); gap: 18px; }
+table { width: 100%; border-collapse: collapse; font: 13px var(--mono); }
+td, th { padding: 5px 6px; border-bottom: 1px solid var(--line); text-align: left; }
+th { font: 500 11px var(--body); text-transform: uppercase; letter-spacing: .07em; color: var(--muted); }
+input[type=color] { width: 40px; height: 24px; border: 0; background: none; padding: 0; }
+.calls { max-height: 300px; overflow: auto; border: 1px solid var(--line); border-radius: 8px; }
+.calls td:last-child { color: var(--muted); word-break: break-all; }
+.note { font-size: 13px; }
+</style>
+
+<div class="wrap">
+  <header>
+    <h1>HUD Desk Preview</h1>
+    <p>This replays the <b>real output of our C worker</b> (<code>hud-worker --dump</code>), call by call, through a simulated HUD terminal. The terminal has images and text areas per handle, pen colours, <code>ImageRemoveAllItems</code> and <code>SwitchVisibility</code>. Timing follows a simulated round trip, with at most 3 calls waiting for an answer and 48 per batch. <b>Drive story</b> is a two-minute drive: the iDrive menu settings, the driving mode, a CarPlay route and the factory navigation change, and the worker's own scene logic decides what the HUD shows.</p>
+  </header>
+
+  <div class="tabs" role="tablist" aria-label="Scenario">
+    <button type="button" role="tab" data-tab="story" aria-selected="true">Drive story</button>
+    <button type="button" role="tab" data-tab="rpm" aria-selected="false">Sport Bar</button>
+    <button type="button" role="tab" data-tab="nav" aria-selected="false">Navigation (Ukraine)</button>
+  </div>
+
+  <canvas id="hud" width="960" height="360" aria-label="Simulated HUD"></canvas>
+
+  <div class="bar">
+    <button id="play" type="button">Pause</button>
+    <select id="run" aria-label="Run"></select>
+    <select id="speed" aria-label="Playback speed"><option value="1">1×</option><option value="2">2×</option><option value="0.25">¼×</option></select>
+    <select id="look" aria-label="Lighting"><option value="day">Day colours</option><option value="night">Night colours</option></select>
+    <input id="scrub" type="range" min="0" max="1000" value="0" aria-label="Position">
+  </div>
+
+  <section class="story" id="story">
+    <div class="idrive" aria-label="iDrive menu">
+      <div class="crumb">My Vehicle</div>
+      <div class="title">ExtendedHUD</div>
+      <div class="status" id="status">–</div>
+      <ul id="menu">
+        <li data-k="sport_bar"><i class="box"></i>Sport Bar</li>
+        <li data-k="always" class="sub"><i class="box"></i>Always show Sport Bar</li>
+        <li data-k="nav"><i class="box"></i>Navigation</li>
+      </ul>
+    </div>
+    <div class="car">
+      <div class="chips" aria-label="Car state">
+        <span class="chip mode" id="c-mode">Comfort</span>
+        <span class="chip" id="c-route">No route</span>
+        <span class="chip" id="c-factory">Factory nav idle</span>
+        <span class="chip" id="c-scene">HUD: –</span>
+      </div>
+      <ol class="log" id="log" aria-label="What happens"></ol>
+    </div>
+  </section>
+
+  <div class="stats">
+    <div class="stat"><span>Time</span><b id="s-t">0.0 s</b></div>
+    <div class="stat"><span>RPM</span><b id="s-rpm">–</b></div>
+    <div class="stat"><span>Gear</span><b id="s-gear">–</b></div>
+    <div class="stat"><span>Calls this frame</span><b id="s-calls">–</b></div>
+    <div class="stat"><span>Frame takes</span><b id="s-ms">–</b></div>
+    <div class="stat"><span>Frames / s</span><b id="s-fps">–</b></div>
+  </div>
+
+  <div class="grid2">
+    <div>
+      <h2>Palette (index → colour on screen)</h2>
+      <table id="pal"><tr><th>Index</th><th>Role</th><th>Day</th><th>Night</th></tr></table>
+      <p class="note">HUD colours are palette indices. The RGB values here are guesses until the swatch test in the car, so edit them to try a mapping. The texts (street, distance) go to text areas 2 and 3. The cluster decides where those sit, their font, and whether they have Cyrillic, so the positions drawn here are assumed. The worker cleans every text, shortens it like a map (“вул.”, “Str.”, “Васильк.”) to 20 characters, and can send Latin instead of Cyrillic.</p>
+    </div>
+    <div>
+      <h2>Calls in this frame</h2>
+      <div class="calls"><table id="calls"></table></div>
+    </div>
+  </div>
+</div>
+
+<script>
+(() => {
+  const RUNS = /*__RUNS__*/[];
+  const NAMES = { "204": "SetVisibility", "20E": "SwitchVisibility", "210": "TextareaSetText", "218": "ImageSetLineColor",
+    "219": "ImageSetLineWidth", "21B": "ImageSetFillColor", "21C": "ImageSetFillMode", "21D": "ImageAddPolygon",
+    "21E": "ImageAddCircle", "220": "ImageRemoveAllItems", "C04": "ImageGetSize", "C09": "ImageAddCircleDiameter" };
+  const ROLES = ["base unlit", "base lit", "yellow unlit", "yellow lit", "red unlit", "red lit", "ink"];
+  const LOOK = {
+    day:   ["#464c52", "#e9ecef", "#604c12", "#ffc21a", "#641a1e", "#f0262e", "#eef1f3"],
+    night: ["#5c2816", "#ff7b2c", "#605018", "#ffd640", "#641a1e", "#f0262e", "#ff7b2c"],
+  };
+  const MODE_VAR = { "Comfort": "--comfort", "Sport": "--sport", "Sport+": "--sportplus", "Eco Pro": "--eco", "unknown": "--comfort" };
+  const DEF = { mode: "Comfort", settings: { sport_bar: 1, always: 0, nav: 1, shift_rpm: 6400 }, route: 0, factory_nav: 0, paused: null };
+  const $ = id => document.getElementById(id);
+  const cv = $("hud"), ctx = cv.getContext("2d");
+  const runSel = $("run"), scrub = $("scrub"), playBtn = $("play"), speedSel = $("speed"), lookSel = $("look");
+  let tab = "story", run, look = "day", colours = {}, playing = true, t = 0, last = performance.now(), fi = 0;
+  let images = {}, visible = {}, texts = {}, lastState = null;
+
+  const hex = s => Array.from({ length: s.length / 2 }, (_, i) => parseInt(s.substr(i * 2, 2), 16));
+  const s16 = (a, i) => { const v = a[i] << 8 | a[i + 1]; return v > 32767 ? v - 65536 : v; };
+  const utf16 = a => { let s = ""; for (let i = 3; i + 1 < a.length - 2; i += 2) s += String.fromCharCode(a[i] << 8 | a[i + 1]); return s; };
+  const frameMs = i => run.frames[i + 1] ? run.frames[i + 1].last_ms : Math.ceil(run.frames[i].calls.length / 3) * run.head.rtt;
+  const endMs = () => Math.max(run.frames.length ? run.frames.at(-1).t + 1500 : 0, run.events.length ? run.events.at(-1).t + 4000 : 0);
+
+  function fillRuns() {
+    runSel.innerHTML = "";
+    RUNS.forEach((r, i) => { if (r.tab !== tab) return; const o = document.createElement("option"); o.value = i; o.textContent = r.label; runSel.appendChild(o); });
+    const pref = [...runSel.options].find(o => o.textContent.startsWith("10 ms")) || runSel.options[0];   // nav: the first run
+    runSel.value = pref.value;
+    select(+runSel.value);
+  }
+  function setLook(name) {
+    look = name;
+    colours = {};
+    run.head.palette.forEach((idx, k) => { if (!(idx in colours)) colours[idx] = LOOK[name][k]; });
+    buildPalette();
+  }
+  function buildPalette() {
+    const tb = $("pal");
+    tb.querySelectorAll("tr:not(:first-child)").forEach(r => r.remove());
+    const seen = {};
+    run.head.palette.forEach((idx, k) => {
+      if (seen[idx]) { seen[idx].querySelector(".role").textContent += ", " + ROLES[k]; return; }
+      const tr = document.createElement("tr");
+      tr.innerHTML = `<td>${idx}</td><td class="role">${ROLES[k]}</td><td><input type="color" data-k="${k}" data-l="day" value="${LOOK.day[k]}" aria-label="Day colour for index ${idx}"></td><td><input type="color" data-k="${k}" data-l="night" value="${LOOK.night[k]}" aria-label="Night colour for index ${idx}"></td>`;
+      tb.appendChild(tr); seen[idx] = tr;
+    });
+    tb.querySelectorAll("input").forEach(inp => inp.addEventListener("input", () => { LOOK[inp.dataset.l][+inp.dataset.k] = inp.value; setLook(look); }));
+  }
+
+  // Simulated terminal: items and a pen per image, a string per text area. The first buffer starts visible.
+  function resetTerminal() { images = {}; visible = {}; texts = {}; visible[run.head.handles[0]] = true; }
+  function apply(f) {
+    const pens = {};
+    f.calls.forEach(c => {
+      const [fkt, payload] = c.split(":"), p = hex(payload), h = p[0] << 8 | p[1];
+      if (fkt === "220") images[h] = [];
+      else if (fkt === "21B") pens[h] = p[2];
+      else if (fkt === "21D") {
+        const n = p[5], pts = [];
+        for (let i = 0; i < n; i++) pts.push([s16(p, 6 + 4 * i), s16(p, 8 + 4 * i)]);
+        (images[h] || (images[h] = [])).push({ c: pens[h], pts });
+      } else if (fkt === "20E") { visible[h] = false; visible[p[2] << 8 | p[3]] = true; }
+      else if (fkt === "204") visible[h] = !!p[2];
+      else if (fkt === "210") texts[h] = utf16(p);
+    });
+  }
+  function seek(ms) {
+    resetTerminal(); fi = 0;
+    while (fi < run.frames.length && run.frames[fi].t + frameMs(fi) <= ms) apply(run.frames[fi++]);
+    t = ms;
+  }
+  function stateAt(ms) {
+    let s = DEF;
+    for (const e of run.events) { if (e.t > ms) break; s = e; }
+    return s;
+  }
+
+  const ink = () => look === "night" ? "#ff7b2c" : "#eef1f3";
+  function factory(sx, sy, st) {
+    ctx.save(); ctx.scale(sx, sy); ctx.globalAlpha = .55;
+    ctx.beginPath(); ctx.arc(54, 88, 27, 0, Math.PI * 2); ctx.fillStyle = look === "night" ? "#f3f1dc" : "#f2f2f2"; ctx.fill();
+    ctx.lineWidth = 6; ctx.strokeStyle = look === "night" ? "#ff8e3a" : "#e3262e"; ctx.stroke();
+    ctx.font = '700 24px "Saira Semi Condensed", sans-serif'; ctx.textAlign = "center"; ctx.fillStyle = "#222"; ctx.fillText(tab === "rpm" ? "100" : "50", 54, 97);
+    const f = run.frames[Math.max(0, fi - 1)];
+    const ratio = [0, 5, 3.2, 2.143, 1.72, 1.314, 1, .822, .64];
+    const kph = f && f.gear ? Math.round(f.rpm / (ratio[f.gear] * 3.15) * 2.04 * 60 / 1000) : 0;
+    ctx.font = '600 68px "Saira Semi Condensed", sans-serif'; ctx.fillStyle = ink(); ctx.fillText(String(kph), 192, 106);
+    ctx.font = '500 15px "Saira Semi Condensed", sans-serif'; ctx.fillText("km/h", 192, 128);
+    if (st && st.factory_nav) {   // the factory's own guidance owns the right half; our images are cleared
+      ctx.globalAlpha = .5; ctx.fillStyle = ink();
+      ctx.beginPath(); ctx.moveTo(352, 120); ctx.lineTo(352, 72); ctx.lineTo(332, 72); ctx.lineTo(362, 40); ctx.lineTo(392, 72); ctx.lineTo(372, 72); ctx.lineTo(372, 120); ctx.closePath(); ctx.fill();
+      ctx.font = '500 13px "IBM Plex Sans", sans-serif'; ctx.fillText("factory navigation", 362, 148);
+    }
+    ctx.restore();
+  }
+  function draw(st) {
+    const [W, H] = run.head.canvas, sx = cv.width / W, sy = cv.height / H;
+    ctx.fillStyle = "#000"; ctx.fillRect(0, 0, cv.width, cv.height);
+    factory(cv.width / 480, cv.height / 180, st);
+    Object.keys(images).map(Number).sort((a, b) => a - b).forEach(h => {
+      if (!visible[h]) return;
+      images[h].forEach(it => {
+        ctx.beginPath(); it.pts.forEach(([x, y], i) => i ? ctx.lineTo(x * sx, y * sy) : ctx.moveTo(x * sx, y * sy)); ctx.closePath();
+        ctx.fillStyle = colours[it.c] || "#ff00ff"; ctx.fill();
+      });
+    });
+    // Text areas: positions and font assumed (the cluster places them). Clipped to the column right of the
+    // manoeuvre, so a text that would not fit shows cut here instead of running over the arrow.
+    const [hs, hd] = run.head.text_handles || [2, 3], k = cv.width / 480;
+    ctx.save(); ctx.beginPath(); ctx.rect(326 * k, 0, 150 * k, 104 * k); ctx.clip();
+    ctx.textAlign = "right"; ctx.fillStyle = ink();
+    if (texts[hs]) { ctx.font = `500 ${12.5 * k}px "IBM Plex Sans", sans-serif`; ctx.globalAlpha = .82; ctx.fillText(texts[hs], 466 * k, 42 * k); }
+    if (texts[hd]) { ctx.font = `600 ${30 * k}px "Saira Semi Condensed", sans-serif`; ctx.globalAlpha = 1; ctx.fillText(texts[hd], 466 * k, 78 * k); }
+    ctx.restore();
+  }
+
+  function renderStory(st) {
+    $("story").hidden = tab !== "story";
+    if (tab !== "story") return;
+    const f = run.frames[Math.max(0, fi - 1)], scene = f && f.t <= t ? f.scene : "none";
+    $("menu").querySelectorAll("li").forEach(li => {
+      const on = !!st.settings[li.dataset.k];
+      li.querySelector(".box").classList.toggle("on", on);
+      const dep = li.dataset.k === "always" ? !st.settings.sport_bar : false;
+      li.classList.toggle("off", dep);
+      li.classList.toggle("flash", st !== DEF && st.t <= t && t - st.t < 1200 && st.event.toLowerCase().includes("menu: " + li.textContent.trim().toLowerCase() + ","));
+    });
+    let status;
+    if (st.factory_nav) status = "HUD busy: factory navigation";
+    else if (scene === "rpm") status = `Sport Bar active · ${st.mode} · ${Math.round(f.rpm).toLocaleString("en-US")} rpm`;
+    else if (scene === "nav") status = `Navigation · ${texts[(run.head.text_handles || [2])[0]] || ""}`;
+    else if (!st.route && st.settings.nav) status = "Waiting for CarPlay route";
+    else status = `Nothing to show in ${st.mode}`;
+    $("status").innerHTML = status + (st.paused ? `<span class="why">${st.paused}</span>` : "");
+    const m = $("c-mode"); m.textContent = st.mode; m.style.background = `var(${MODE_VAR[st.mode]})`;
+    $("c-route").textContent = st.route ? "CarPlay route" : "No route"; $("c-route").classList.toggle("on", !!st.route);
+    $("c-factory").textContent = st.factory_nav ? "Factory nav guiding" : "Factory nav idle"; $("c-factory").classList.toggle("on", !!st.factory_nav);
+    $("c-scene").textContent = "HUD: " + ({ rpm: "Sport Bar", nav: "Navigation", none: "factory only" }[scene]);
+    if (st !== lastState) {
+      lastState = st;
+      $("log").querySelectorAll("li").forEach((li, i) => {
+        const e = run.events[i];
+        li.classList.toggle("past", e.t <= t);
+        li.classList.toggle("now", e === st);
+        if (e === st) li.scrollIntoView({ block: "nearest" });
+      });
+    }
+  }
+  function buildLog() {
+    const ol = $("log"); ol.innerHTML = "";
+    run.events.forEach(e => {
+      const li = document.createElement("li"); li.tabIndex = 0;
+      li.innerHTML = `<span>${(e.t / 1000).toFixed(0)} s</span><div>${e.event}</div>`;
+      const go = () => { seek(e.t + 1); lastState = null; };
+      li.addEventListener("click", go); li.addEventListener("keydown", ev => { if (ev.key === "Enter") go(); });
+      ol.appendChild(li);
+    });
+    lastState = null;
+  }
+  function stats() {
+    const f = run.frames[Math.max(0, fi - 1)];
+    $("s-t").textContent = (t / 1000).toFixed(1) + " s";
+    if (!f) return;
+    $("s-rpm").textContent = Math.round(f.rpm).toLocaleString("en-US");
+    $("s-gear").textContent = f.gear || "–";
+    $("s-calls").textContent = f.calls.length;
+    $("s-ms").textContent = frameMs(Math.max(0, fi - 1)) + " ms";
+    $("s-fps").textContent = run.frames.filter(x => x.t > t - 1000 && x.t <= t).length;
+    $("calls").innerHTML = "<tr><th>#</th><th>Call</th><th>Handle</th><th>Payload</th></tr>" + f.calls.map((c, i) => {
+      const [fkt, p] = c.split(":");
+      const shown = fkt === "210" ? "“" + utf16(hex(p)) + "”" : p.slice(4);
+      return `<tr><td>${i + 1}</td><td>${NAMES[fkt] || fkt}</td><td>${parseInt(p.slice(0, 4), 16)}</td><td>${shown}</td></tr>`;
+    }).join("");
+  }
+
+  function select(i) { run = RUNS[i]; setLook(look); buildLog(); seek(0); }
+  document.querySelectorAll(".tabs button").forEach(b => b.addEventListener("click", () => {
+    tab = b.dataset.tab;
+    document.querySelectorAll(".tabs button").forEach(x => x.setAttribute("aria-selected", String(x === b)));
+    fillRuns();
+  }));
+  runSel.addEventListener("change", () => select(+runSel.value));
+  lookSel.addEventListener("change", () => setLook(lookSel.value));
+  playBtn.addEventListener("click", () => { playing = !playing; playBtn.textContent = playing ? "Pause" : "Play"; });
+  scrub.addEventListener("input", () => { seek(endMs() * scrub.value / 1000); lastState = null; });
+
+  let tick = 0;
+  function loop(now) {
+    const dt = Math.min(100, now - last); last = now;
+    if (playing && run.frames.length) {
+      t += dt * +speedSel.value;
+      if (t > endMs()) { seek(0); lastState = null; }
+      while (fi < run.frames.length && run.frames[fi].t + frameMs(fi) <= t) apply(run.frames[fi++]);
+      scrub.value = Math.round(1000 * t / endMs());
+    }
+    const st = tab === "story" ? stateAt(t) : null;
+    draw(st);
+    if ((tick += dt) > 150) { tick = 0; stats(); if (st) renderStory(st); else $("story").hidden = true; }
+    requestAnimationFrame(loop);
+  }
+  if (RUNS.length) { fillRuns(); requestAnimationFrame(loop); }
+})();
+</script>

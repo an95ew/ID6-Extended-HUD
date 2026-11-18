@@ -1,0 +1,52 @@
+<?xml version="1.0" encoding="utf-8"?>
+<!-- Layout copied from the packaged HudTest.xml (property 20/21 = x/y, 9/10 = width/height).
+     src/extended_hud.cpp answers actions 21-23 and writes models 50-53. -->
+<pluginApps>
+  <pluginApp applicationType="VehicleInformation" applicationWeight="212" text="ExtendedHUD">
+    <entryButton id="1" action="10">
+      <properties><property id="23" value="2" /></properties>
+    </entryButton>
+    <actions>
+      <hmiAction id="10" target="100" />
+      <raAction id="21" />
+      <raAction id="22" />
+      <raAction id="23" />
+    </actions>
+    <models>
+      <raDataModel id="50" modelType="Richtext" />
+      <raBoolModel id="51" />
+      <raBoolModel id="52" />
+      <raBoolModel id="53" />
+    </models>
+    <hmiStates>
+      <hmiState id="100" text="ExtendedHUD">
+        <components>
+          <label id="150" model="50">
+            <properties>
+              <property id="20" value="46" /><property id="21" value="70" />
+              <property id="9" value="900" /><property id="10" value="60" />
+            </properties>
+          </label>
+          <checkbox id="151" action="21" model="51" text="Sport Bar">
+            <properties>
+              <property id="20" value="46" /><property id="21" value="140" />
+              <property id="9" value="460" /><property id="10" value="60" />
+            </properties>
+          </checkbox>
+          <checkbox id="152" action="22" model="52" text="Always show Sport Bar">
+            <properties>
+              <property id="20" value="96" /><property id="21" value="205" />
+              <property id="9" value="560" /><property id="10" value="60" />
+            </properties>
+          </checkbox>
+          <checkbox id="153" action="23" model="53" text="Navigation">
+            <properties>
+              <property id="20" value="46" /><property id="21" value="270" />
+              <property id="9" value="460" /><property id="10" value="60" />
+            </properties>
+          </checkbox>
+        </components>
+      </hmiState>
+    </hmiStates>
+  </pluginApp>
+</pluginApps>

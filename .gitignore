@@ -1,0 +1,17 @@
+# Local agent notes, rules, stories, prompts and artifacts (track only .claude/skills/)
+.claude/*
+!.claude/skills/
+
+# Local build outputs and proprietary car frameworks
+/native/out/
+/native/build/
+/native/frameworks/
+/native/runtime/
+
+# Python / OS / editor artifacts
+__pycache__/
+*.pyc
+.venv/
+.DS_Store
+*.o
+*.a
