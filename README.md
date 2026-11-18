@@ -4,6 +4,10 @@ Standalone BMW NBT Evo (iDrive 6) plugin and native QNX HUD worker that renders 
 
 Tested on an F34 340i (B58), NBT Evo firmware `NBTevo_X20511I`, split-node unit (`hu-jacinto` SSH / `hu-omap` HMI).
 
+## Special thanks
+
+Special thanks to [inotbarnacle](https://github.com/inotbarnacle), the author of [ID6_apps_prerelease](https://github.com/inotbarnacle/ID6_apps_prerelease/tree/main). His findings and documentation were used to build and provide this plugin.
+
 ## What is included
 
 ```text
