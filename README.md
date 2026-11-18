@@ -8,6 +8,10 @@ Tested on an F34 340i (B58), NBT Evo firmware `NBTevo_X20511I`, split-node unit 
 
 Special thanks to [inotbarnacle](https://github.com/inotbarnacle), the author of [ID6_apps_prerelease](https://github.com/inotbarnacle/ID6_apps_prerelease/tree/main). His findings and documentation were used to build and provide this plugin.
 
+## Photos
+
+![Sport Bar HUD preview](photos/hud-preview.png)
+
 ## What is included
 
 ```text
