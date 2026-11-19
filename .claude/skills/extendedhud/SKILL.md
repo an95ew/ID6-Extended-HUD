@@ -94,3 +94,10 @@ then a knob restart). Never `cat >` over the loaded `.so` or over the running wo
 - `launch()` in `diagnostic_worker.h` sends the child's stderr to /dev/null. ExtendedHUD uses its own `spawnLogged`, so failures are visible.
 - Name history: it was drafted as "HUD Sport Bar" / `HudSportBar`. The owner renamed it **ExtendedHUD** on 2026-11-18. The worker binary keeps
   its name `hud-sportbar-qnx`.
+
+## Speed cameras and red (2026-11-19, branch feature/speed-cameras)
+
+- `cameras.txt` in the app folder (built by `tools/cameras_build.py` from the Patrol Police table), passed as `--cameras`. The alert
+  needs the car's GPS from CDS (`cds.txt` kinds `gps`, `heading`) and the engine running. Code: `src/hud/hud_cam.[ch]`.
+- Settings keys: `cameras=0|1` (default 1), `red=N` (fill index of a red, 0 = none known: today's white look).
+- Desk demo: `build/hud-worker --dump --scene cam ...`; car: `--draw-parked --scene cam` (hud_car_run.py K1/K1r).

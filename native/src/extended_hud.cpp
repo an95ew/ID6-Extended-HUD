@@ -63,6 +63,8 @@ class ExtendedHUD : public bmw::PluginApp {
     long cdsLast_[HUD_CDS_MAX];          // the last number per property, -1 none yet
     uint64_t cdsSentAt_[HUD_CDS_MAX];
     int ncds_, cdsSock_;
+    hud_cds_geo geo_;                   // the car's position for the camera alert (kinds gps, heading)
+    uint64_t geoSentAt_;
     bool cdsArmed_, cdsOn_, cdsGuard_;
     uint64_t cdsStartAt_, cdsGuardUntil_;
     unsigned cdsLines_;
@@ -176,7 +178,7 @@ public:
     ExtendedHUD(bmw::IDispatcher& d, bmw::BasicString<char> name, unsigned maj, unsigned mn,
                 bmw::RHMIInterfaceVersion rhmi, const bmw::Bundle& cfg, const bmw::Bundle& res)
         : bmw::PluginApp(d, name, maj, mn, rhmi, cfg, res), worker_(-1), stopping_(false), generation_(0),
-          restarts_(0), retry_at_(0), conflict_(0), ncds_(0), cdsSock_(-1), cdsArmed_(false), cdsOn_(false),
+          restarts_(0), retry_at_(0), conflict_(0), ncds_(0), cdsSock_(-1), geoSentAt_(0), cdsArmed_(false), cdsOn_(false),
           cdsGuard_(false), cdsStartAt_(0), cdsGuardUntil_(0), cdsLines_(0) {
         hud_app_defaults(&set_);
         status_[0] = 0;
@@ -272,6 +274,7 @@ private:
         // worker drops data older than 2 s, so each routed value is repeated: unchanged is still the car's value.
         for (int i = 0; cdsOn_ && i < ncds_; ++i)
             if (cds_[i].kind != HUD_CDS_LOG && cdsLast_[i] >= 0 && now - cdsSentAt_[i] >= 500u) cdsSend(i, cdsLast_[i], now);
+        if (cdsOn_ && geo_.have_pos && now - geoSentAt_ >= 500u) geoSend(now);   // parked, the position does not change
         if (cdsGuard_ && now >= cdsGuardUntil_) {
             remove(kCdsGuard);
             cdsGuard_ = false;
@@ -286,6 +289,8 @@ private:
         cdsArmed_ = false;
         cdsOn_ = true;
         for (int i = 0; i < HUD_CDS_MAX; ++i) { cdsLast_[i] = -1; cdsSentAt_[i] = 0; }
+        memset(&geo_, 0, sizeof geo_);
+        geo_.heading = -1;
         cdsSock_ = socket(AF_INET, SOCK_DGRAM, 0);
         if (cdsSock_ >= 0) fcntl(cdsSock_, F_SETFL, fcntl(cdsSock_, F_GETFL) | O_NONBLOCK);
         typedef bmw::Delegate<bool, const bmw::BasicString<unsigned short>&> Watch;
@@ -336,9 +341,25 @@ private:
         long number;
         hud_cds_value(value.data(), HUD_CDS_TEXT, text, sizeof text, &number);
         cdsLog("value", cds_[i].name, value);
+        if (cds_[i].kind == HUD_CDS_GPS || cds_[i].kind == HUD_CDS_HEADING) {
+            if (hud_cds_geo_take(&geo_, cds_[i].kind, text)) geoSend(bd_mono_ms());
+            return true;
+        }
         if (cds_[i].kind != HUD_CDS_LOG) cdsLast_[i] = number;
         cdsSend(i, number, bd_mono_ms());
         return true;
+    }
+    void geoSend(uint64_t now) {
+        struct geo_frame f;
+        geoSentAt_ = now;
+        if (cdsSock_ >= 0 && hud_cds_geo_frame(&geo_, now, &f)) {
+            struct sockaddr_in to;
+            memset(&to, 0, sizeof to);
+            to.sin_family = AF_INET;
+            to.sin_port = htons(HUD_APP_UDP_PORT);
+            to.sin_addr.s_addr = htonl(INADDR_LOOPBACK);
+            sendto(cdsSock_, &f, sizeof f, 0, reinterpret_cast<struct sockaddr*>(&to), sizeof to);   // never blocks
+        }
     }
     void cdsSend(int i, long number, uint64_t now) {
         struct drive_frame f;

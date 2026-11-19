@@ -5,7 +5,7 @@ description: Get CarPlay turn-by-turn (iAP2 route guidance from Apple Maps / Goo
 
 # CarPlay turns for the HUD
 
-**Status (2026-11-18): on hold, the owner's decision is pending.** Before doing anything here, ask which option (below). Full finding:
+**Status (2026-11-19): option 1 decided (2026-11-18), desk port done (`src/rghook/rghook.c`, `src/hud/hud_rg.[ch]`, worker `--rg-file`), not on the car yet.** Story: `.claude/stories/carplay-nav/`. Full finding:
 `.claude/stories/hud-redesign/carplay-nav-source.md`. ExtendedHUD draws the nav scene (`src/hud/hud_nav.c`) only from the demo route
 today. In live mode `st.route_active` is never set, so a real CarPlay route shows nothing. That is expected, not a bug.
 
@@ -50,4 +50,4 @@ outside `Plugins`. The installer checks `mm-ipod` by hash (known images 006 and 
 3. ExtendedHUD side, host-tested: a `routeguidance` parser in `src/hud/` (key::value → `hud_nav_info`), `route_active` from route_state,
    CPManeuverType 0..53 → `hud_maneuver`, lanes → `hud_lane`. The worker polls the file (as it does `settings.txt`). Then `test_hud.c` fixtures
    from a real file.
-4. Mind the scene rules: with "Always" ticked the Sport Bar wins. The driving mode is still unknown, so nav needs Always off (`hud_scene.c`).
+4. Mind the scene rules (`hud_scene.c`): the Sport Bar wins in Sport/Sport+ (mode from CDS since run 6) or with "Always" ticked; otherwise nav when `route_active`.

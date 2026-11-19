@@ -92,19 +92,20 @@ int hud_app_worker_argv(const char *dir, const char *gateway, char *buf, size_t 
         /* car run 6 W5: frames overlap (the next starts once the last is all sent), 6.2 frames/s against 3.4 */
         "--pipeline",
     };
-    const char *paths[3];
+    const char *paths[4];
     size_t used = 0, i;
     int argc = 0;
     char *p = buf;
-    const char *fmt[3] = { "%s/hud-sportbar-qnx", "%s/shift-deck-qnx", "%s/settings.txt" };
-    for (i = 0; i < 3; i++) {
+    /* cameras.txt: the speed-camera list (tools/cameras_build.py); none = no camera alerts */
+    const char *fmt[4] = { "%s/hud-sportbar-qnx", "%s/shift-deck-qnx", "%s/settings.txt", "%s/cameras.txt" };
+    for (i = 0; i < 4; i++) {
         int n = snprintf(p, cap - used, fmt[i], dir);
         if (n < 0 || (size_t)n >= cap - used) return -1;
         paths[i] = p;
         p += n + 1;
         used += (size_t)n + 1;
     }
-    if (max < (int)(sizeof k_fixed / sizeof k_fixed[0]) + 8) return -1;
+    if (max < (int)(sizeof k_fixed / sizeof k_fixed[0]) + 10) return -1;
     argv[argc++] = paths[0];
     for (i = 0; i < sizeof k_fixed / sizeof k_fixed[0]; i++) argv[argc++] = k_fixed[i];
     argv[argc++] = "--collector";
@@ -113,6 +114,8 @@ int hud_app_worker_argv(const char *dir, const char *gateway, char *buf, size_t 
     argv[argc++] = gateway;
     argv[argc++] = "--settings";
     argv[argc++] = paths[2];
+    argv[argc++] = "--cameras";
+    argv[argc++] = paths[3];
     argv[argc] = NULL;
     return argc;
 }

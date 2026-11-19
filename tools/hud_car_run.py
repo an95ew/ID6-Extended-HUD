@@ -191,6 +191,25 @@ STEPS = {
                ["--draw-parked", "--trace", "pull", "--layout", "split", "--flash-ms", "0", "--palette", "3,4,3,4,3,4,4",
                 "--shift-colour", "4", "--backs", "fill", "--in-flight", "16", "--log", "--seconds", "30"], 30,
                "Video: as W2?", ("handles", "canvas")),
+    # Car run 7 (stories hud-polish/red.md, speed-cameras): is there a red in the palette with Sport selected, and the camera alert.
+    "P1": Step("swatch bars fill 0..23 with SPORT selected (does the palette follow the KOMBI design? JayJay3071)", "ours",
+               ["--swatches", "0", "--swatch-n", "8", "--swatch-pages", "3", "--show", "both", "--seconds", "8"], 30,
+               "Select SPORT first. Photo each page (8 s): page k shows 8k..8k+7 left to right. Is any bar red?",
+               ("handles", "canvas")),
+    "P1p": Step("as P1 with SPORT+ selected", "ours",
+                ["--swatches", "0", "--swatch-n", "8", "--swatch-pages", "3", "--show", "both", "--seconds", "8"], 30,
+                "Select SPORT+ first. Photo each page: is any bar red?", ("handles", "canvas")),
+    "K1": Step("camera alert, scripted: a camera passed at 90 km/h every 30 s, whole picture then with the bar, 60 s", "ours",
+               ["--draw-parked", "--scene", "cam", "--layout", "split", "--flash-ms", "0", "--palette", "3,4,3,4,3,4,4", "--shift-colour", "4", "--backs", "fill", "--in-flight", "32", "--pipeline", "--seconds", "60"], 60,
+               "Video: 0-30 s the whole picture (camera, limit sign, shrinking bar) from 4 s to 26 s; 30-60 s the bar with the "
+               "badge and the limit 50 in the revs' place from 34 s to 56 s. Readable? Anything garbled?", ("handles", "canvas")),
+    "K1r": Step("as K1 with the red from P1 (set red N)", "ours",
+                ["--draw-parked", "--scene", "cam", "--layout", "split", "--flash-ms", "0", "--palette", "3,4,3,4,3,4,4", "--shift-colour", "4", "--backs", "fill", "--in-flight", "32", "--pipeline", "--seconds", "60"], 60,
+                "Video: is the camera red? The limit and bar still white?", ("handles", "canvas", "red")),
+    "K2r": Step("Sport Bar pull with the red: lit 6000+ zone and the blinking gear in red, 40 s", "ours",
+                ["--draw-parked", "--trace", "pull", "--shift-hold", "2500", "--layout", "split", "--flash-ms", "0", "--palette", "3,4,3,4,3,4,4", "--shift-colour", "4", "--backs", "fill", "--in-flight", "32", "--pipeline", "--seconds", "40"], 40,
+                "Video: the top zone red when lit, the gear red while it blinks past 6400, all else as today?",
+                ("handles", "canvas", "red")),
 }
 SETTABLE = {
     "palette": re.compile(r"(default|\d{1,3}(,\d{1,3}){6})"),
@@ -198,6 +217,7 @@ SETTABLE = {
     "handles": re.compile(r"\d{1,3},\d{1,3}"),
     "inst": re.compile(r"\d{1,2}"),
     "container": re.compile(r"\d{1,3}"),
+    "red": re.compile(r"\d{1,3}"),   # the fill index that showed red (P1)
 }
 
 
@@ -232,6 +252,8 @@ def worker_args(step, state):
     if (state.get("palette") not in (None, "default") and "--palette" not in args
             and ("--draw-parked" in args or "--grid" in args)):
         args += ["--palette", state["palette"]]
+    if state.get("red") and "--red" not in args and "red" in step.needs:
+        args += ["--red", state["red"]]
     return args
 
 

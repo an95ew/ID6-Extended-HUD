@@ -1,4 +1,5 @@
 #include "hud_strip.h"
+#include "hud_cam.h"
 
 #include <math.h>
 #include <string.h>
@@ -33,6 +34,7 @@ void hud_palette_default(hud_palette *p)
     p->ink = 4;
     p->shift_on = 0;
     p->backs = HUD_BACKS_FILL;
+    p->alert = 0;   /* no red found on 82/02 yet (run 3); settings red=N once the car shows one */
 }
 
 void hud_geom_default(hud_geom *g)
@@ -175,6 +177,9 @@ hud_strip_key hud_strip_key_of(const hud_profile *p, const hud_geom *g, const hu
     k.peak_field = -1;
     k.gear = a->gear;
     k.rpm = g->rpm_h > 0 && a->have ? hud_rpm_shown(a->rpm) : -1;
+    k.gear_alert = a->gear_alert != 0;
+    k.cam_limit = a->cam_limit > 0 && a->cam_limit < 1000 ? a->cam_limit : 0;
+    if (k.cam_limit) k.rpm = -1;   /* the limit takes the readout's place */
     k.shifting = hud_anim_shifting(p, a);
     k.flash_on = k.shifting ? hud_anim_flash_on_p(p, a) : 1;
     if (k.shifting) {
@@ -393,7 +398,8 @@ int hud_strip_frame(hud_batch *b, const hud_profile *p, const hud_palette *pal, 
         if (emit_pen(&e, color_of(pal, hud_field_zone(k.peak_field), 1)) || emit_outline(&e, pt, 4)) goto full;
     }
     if (k.gear >= 1 && k.gear <= 9 && g->gear_h > 0) {
-        uint8_t ink = !k.shifting ? pal->ink : pal->shift_on ? pal->shift_on : k.flash_on ? pal->red_on : pal->red_off;
+        uint8_t ink = !k.shifting ? (k.gear_alert && pal->alert ? pal->alert : pal->ink)
+                    : pal->shift_on ? pal->shift_on : k.flash_on ? pal->red_on : pal->red_off;
         if (g->solid_digits) {
             hud_point dp[HUD_DIGIT_PTS];
             int dw = digit_w(g->gear_h);
@@ -405,6 +411,24 @@ int hud_strip_frame(hud_batch *b, const hud_profile *p, const hud_palette *pal, 
                 seg_poly(g, i, pt);
                 if (emit_pen(&e, ink) || emit_outline(&e, pt, 4)) goto full;
             }
+    }
+    if (k.cam_limit && g->rpm_h > 0 && g->gear_h > 0) {
+        /* Camera alert with the bar (design approved 2026-11-19): the camera in the gap right of the gear, the limit where
+           the revs are, at their size, until 50 m past the camera. Every shape on its own: the HUD draws joins. */
+        hud_point icon[HUD_CAM_ICON_POLYS][HUD_CAM_ICON_PTS], dp[HUD_DIGIT_PTS];
+        unsigned np[HUD_CAM_ICON_POLYS];
+        int dh = g->rpm_h, dw = digit_w(dh), gap = dh / 8 < 2 ? 2 : dh / 8, bottom = g->gear_top + g->gear_h;
+        int n = hud_cam_icon(1, g->gear_cx + digit_w(g->gear_h) / 2 + 5, bottom - 27, icon, np), x = g->rpm_x1 - dw;
+        int v = k.cam_limit;
+        if (emit_pen(&e, pal->alert ? pal->alert : pal->ink)) goto full;
+        for (i = 0; i < n; i++)
+            if (emit_flush(&e) || emit_outline(&e, icon[i], np[i])) goto full;
+        do {
+            int c = hud_digit_poly(v % 10, x, bottom - dh, dw, dh, digit_t(dh), dp);
+            if (emit_pen(&e, pal->ink) || emit_flush(&e) || emit_outline(&e, dp, (unsigned)c)) goto full;
+            x -= dw + gap;
+            v /= 10;
+        } while (v > 0);
     }
     if (k.rpm >= 0) {
         /* Right-aligned, bottom on the gear's, in the ink: the number is read, not the colour. A polygon per digit:

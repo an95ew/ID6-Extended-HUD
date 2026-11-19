@@ -15,7 +15,7 @@ c() { qcc -V4.4.2,gcc_ntoarmv7le -Wc,-std=c99 -Wall -Wextra -Werror "$@"; }
 
 c -Isrc -Isrc/hud -O2 \
     src/hud/hud_worker.c src/hud/hud_most.c src/hud/hud_proto.c src/hud/hud_strip.c src/hud/hud_scene.c \
-    src/hud/hud_sender.c src/hud/hud_nav.c src/hud/hud_nav_demo.c src/hud/hud_text.c src/hud/hud_rg.c src/hud/hud_gear.c \
+    src/hud/hud_sender.c src/hud/hud_nav.c src/hud/hud_nav_demo.c src/hud/hud_text.c src/hud/hud_rg.c src/hud/hud_gear.c src/hud/hud_cam.c \
     src/most/*.c -lm -lsocket -o out/hud-sportbar-qnx
 
 c -Isrc -O2 \

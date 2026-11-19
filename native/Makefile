@@ -9,8 +9,8 @@ MOST = src/most/most_link.c src/most/dsi_client.c src/most/most_proto.c src/most
 MOST_HEADERS = src/most/most_link.h src/most/dsi_client.h src/most/most_proto.h src/most/dsi_abi.h
 FAKE_DSI = tests/fake_dsi.c tests/fake_dme.c tests/fake_dsi.h tests/fake_dme.h
 HOST_LINK = $(CC) $(CFLAGS) -pthread -DMOST_HOST -Isrc -Itests
-HUD = src/hud/hud_app.c src/hud/hud_proto.c src/hud/hud_strip.c src/hud/hud_scene.c src/hud/hud_sender.c src/hud/hud_nav.c src/hud/hud_nav_demo.c src/hud/hud_text.c src/hud/hud_rg.c src/hud/hud_gear.c src/hud/hud_cds.c
-HUD_HEADERS = src/hud/hud_app.h src/hud/hud_proto.h src/hud/hud_strip.h src/hud/hud_scene.h src/hud/hud_sender.h src/hud/hud_nav.h src/hud/hud_nav_demo.h src/hud/hud_text.h src/hud/hud_glyphs.h src/hud/hud_rg.h src/hud/hud_gear.h src/hud/hud_cds.h
+HUD = src/hud/hud_app.c src/hud/hud_proto.c src/hud/hud_strip.c src/hud/hud_scene.c src/hud/hud_sender.c src/hud/hud_nav.c src/hud/hud_nav_demo.c src/hud/hud_text.c src/hud/hud_rg.c src/hud/hud_gear.c src/hud/hud_cds.c src/hud/hud_cam.c
+HUD_HEADERS = src/hud/hud_app.h src/hud/hud_proto.h src/hud/hud_strip.h src/hud/hud_scene.h src/hud/hud_sender.h src/hud/hud_nav.h src/hud/hud_nav_demo.h src/hud/hud_text.h src/hud/hud_glyphs.h src/hud/hud_rg.h src/hud/hud_gear.h src/hud/hud_cds.h src/hud/hud_cam.h
 
 .PHONY: test-hud test clean
 

@@ -2,10 +2,11 @@
 
 #include "drive_frame.h"
 
+#include <math.h>
 #include <stdlib.h>
 #include <string.h>
 
-static const char *const k_kinds[] = { "log", "rpm", "kph", "gear", "mode" };
+static const char *const k_kinds[] = { "log", "rpm", "kph", "gear", "mode", "gps", "heading" };
 
 int hud_cds_parse(const char *text, size_t len, hud_cds_prop *out, int max)
 {
@@ -81,9 +82,61 @@ int hud_cds_value(const uint16_t *s, int max, char *ascii, size_t cap, long *num
     return n;
 }
 
+int hud_cds_json_num(const char *text, const char *key, double *out)
+{
+    size_t kn = strlen(key);
+    const char *p = text;
+    while ((p = strstr(p, key)) != NULL) {
+        const char *q = p + kn;
+        char *end;
+        double v;
+        if (p == text || p[-1] != '"' || *q != '"') { p = q; continue; }
+        for (q++; *q == ' ' || *q == '\t'; q++) {}
+        if (*q != ':') { p = q; continue; }
+        for (q++; *q == ' ' || *q == '\t' || *q == '"'; q++) {}   /* a number sent as a string too */
+        v = strtod(q, &end);
+        if (end == q) { p = q; continue; }
+        *out = v;
+        return 1;
+    }
+    return 0;
+}
+
+int hud_cds_geo_take(hud_cds_geo *g, hud_cds_kind kind, const char *text)
+{
+    double a, b;
+    if (kind == HUD_CDS_GPS) {
+        if (!(hud_cds_json_num(text, "latitude", &a) || hud_cds_json_num(text, "lat", &a))) return 0;
+        if (!(hud_cds_json_num(text, "longitude", &b) || hud_cds_json_num(text, "lon", &b))) return 0;
+        if (a < -90 || a > 90 || b < -180 || b > 180 || (a == 0 && b == 0)) return 0;   /* 0,0: no fix yet */
+        g->lat_e6 = (int32_t)floor(a * 1e6 + 0.5);
+        g->lon_e6 = (int32_t)floor(b * 1e6 + 0.5);
+        g->have_pos = 1;
+        return 1;
+    }
+    if (kind == HUD_CDS_HEADING && hud_cds_json_num(text, "heading", &a) && a >= 0 && a < 360.5) {
+        g->heading = (int)floor(a + 0.5) % 360;
+        return 1;
+    }
+    return 0;
+}
+
+int hud_cds_geo_frame(const hud_cds_geo *g, uint64_t now_ms, struct geo_frame *f)
+{
+    if (!g->have_pos) return 0;
+    memset(f, 0, sizeof *f);
+    f->magic = GEO_MAGIC;
+    f->lat_e6 = g->lat_e6;
+    f->lon_e6 = g->lon_e6;
+    f->heading = g->heading;
+    f->sampled_ms = now_ms;
+    f->kph = -1;
+    return 1;
+}
+
 int hud_cds_frame(hud_cds_kind kind, long number, uint64_t now_ms, struct drive_frame *f)
 {
-    if (kind == HUD_CDS_LOG || number < 0 || number > 0x7fffffffL) return 0;
+    if (kind == HUD_CDS_LOG || kind == HUD_CDS_GPS || kind == HUD_CDS_HEADING || number < 0 || number > 0x7fffffffL) return 0;
     f->sampled_ms = now_ms;
     f->rpm = kind == HUD_CDS_RPM ? (int32_t)number : -1;
     f->kph = kind == HUD_CDS_KPH ? (int32_t)number : -1;

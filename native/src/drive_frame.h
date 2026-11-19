@@ -18,4 +18,16 @@ struct drive_frame {
 
 enum { DRIVE_SRC_OBD = 0, DRIVE_SRC_CDS = 1 };
 
+/* The car's position, from the plugin's CDS feed (navigation.GPSPosition / GPSExtendedInfo), on the same port. 40 bytes, so
+   a receiver tells it from a drive_frame by its size, then by the magic. */
+enum { GEO_MAGIC = 0x47454F31, GEO_STALE_MS = 3000 };   /* "GEO1" */
+struct geo_frame {
+    uint32_t magic;
+    int32_t lat_e6, lon_e6;   /* WGS84 degrees x 1e6 */
+    int32_t heading;          /* degrees 0..359 from north, -1 not known (the worker takes it from the track) */
+    uint64_t sampled_ms;
+    int32_t kph;              /* -1 not known */
+    int32_t reserved[3];      /* 0 */
+};
+
 #endif

@@ -147,11 +147,31 @@ def check_car_modes_without_dsi():
     assert r.returncode == 2
 
 
+def check_camera():
+    # Speed-camera alert (owner 2026-11-19): from 500 m before the camera to 50 m after it; the whole picture without the bar
+    # (redrawn every 10 m: the distance bar), with the bar a badge and the limit in the revs' place; the camera in the red.
+    _, fs, err = frames("--scene", "cam", "--rtt", "260", "--in-flight", "32", "--pipeline", "--layout", "split",
+                        "--canvas", "120x72", "--handles", "31,32", "--palette", "3,4,3,4,3,4,4", "--red", "9")
+    assert "0 timeouts" in err
+    whole = [f for f in fs if f["t"] < 30000 and len(f["calls"]) > 4]
+    assert 40 <= len(whole) <= 60 and all(len(f["calls"]) <= 16 for f in whole), [len(f["calls"]) for f in whole]
+    first, last = whole[0]["t"], whole[-1]["t"]
+    assert 3900 <= first <= 4300 and 23800 <= last <= 24300, (first, last)   # 600 m -> 500 m at 25 m/s: 4 s; at it: 24 s
+    gone = [f["t"] for f in fs if 24300 < f["t"] < 30000 and f["calls"][0].startswith("220:")]
+    assert gone and 25800 <= gone[0] <= 26300, gone                              # 50 m past: cleared
+    assert all(any(c == "21B:%04x09" % int(f["calls"][0][4:8], 16) for c in f["calls"]) for f in whole)
+    bar = [f for f in fs if 30000 <= f["t"] < 60000 and f["scene"] == "rpm"]
+    badge = [f for f in bar if any(c.endswith("09") and c.startswith("21B:") for c in f["calls"])]
+    assert badge and all(len(f["calls"]) <= 20 for f in badge)
+    assert any(f["t"] > 56000 or not any(c.startswith("21B:") and c.endswith("09") for c in f["calls"]) for f in bar[-1:])
+
+
 if __name__ == "__main__":
     check_gear_blink()
     check_dump()
     check_nav()
     check_story()
     check_car_modes_without_dsi()
+    check_camera()
     print("hud worker tests passed")
     sys.exit(0)

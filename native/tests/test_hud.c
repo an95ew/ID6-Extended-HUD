@@ -6,6 +6,7 @@
 #include "hud/hud_app.h"
 #include "hud/hud_gear.h"
 #include "hud/hud_cds.h"
+#include "hud/hud_cam.h"
 #include "drive_frame.h"
 #include <stdlib.h>
 #include <sys/stat.h>
@@ -378,7 +379,7 @@ static void test_scene(void) {
     {
         hud_settings r;
         memset(&r, 0, sizeof r);
-        assert(hud_settings_parse(&r, text, strlen(text)) == 10 && !memcmp(&r, &s, sizeof r));
+        assert(hud_settings_parse(&r, text, strlen(text)) == 12 && !memcmp(&r, &s, sizeof r));
     }
 }
 
@@ -885,9 +886,10 @@ static void test_app(void) {
         if (!strcmp(argv[i], "--collector")) { assert(!strcmp(argv[i + 1], HUD_APP_DIR "/shift-deck-qnx")); found |= 2; }
         if (!strcmp(argv[i], "--host")) { assert(!strcmp(argv[i + 1], "169.254.21.3")); found |= 4; }
         if (!strcmp(argv[i], "--most-inst")) { assert(!strcmp(argv[i + 1], "2")); found |= 8; }
+        if (!strcmp(argv[i], "--cameras")) { assert(!strcmp(argv[i + 1], HUD_APP_DIR "/cameras.txt")); found |= 64; }
         assert(strcmp(argv[i], "--text-clear"));
     }
-    assert(found == 63);
+    assert(found == 127);
     assert(hud_app_worker_argv(HUD_APP_DIR, "x", buf, 20, argv, HUD_APP_MAX_ARGS) == -1);
 
     assert(hud_app_conflict(dir) == NULL);
@@ -1067,6 +1069,220 @@ static void test_split(void) {
     }
 }
 
+/* ---- speed cameras (story speed-cameras, owner's rules 2026-11-19) ---- */
+
+/* A fix m metres north and e east of 50.45 N 30.50 E, heading h (-1 = take it from the track). */
+static hud_geo_fix fix_at(double north, double east, int h)
+{
+    hud_geo_fix f;
+    f.lat_e6 = 50450000 + (int32_t)(north * 1e6 / 111320.0);
+    f.lon_e6 = 30500000 + (int32_t)(east * 1e6 / (111320.0 * 0.63700));
+    f.heading = h;
+    f.valid = 1;
+    return f;
+}
+
+static hud_cam cam_at(double north, double east, int limit, int dir)
+{
+    hud_geo_fix f = fix_at(north, east, 0);
+    hud_cam c;
+    c.lat_e6 = f.lat_e6;
+    c.lon_e6 = f.lon_e6;
+    c.limit = (int16_t)limit;
+    c.dir = (int16_t)dir;
+    return c;
+}
+
+/* Drives north from `from` to `to` metres in 5 m steps; returns the distance shown at `at` (or -9999 if none then),
+   and the first and last positions where an alert was on. */
+static int drive_north(const hud_cam *cams, int n, int from, int to, int heading, int at, int *on_from, int *on_to)
+{
+    hud_cam_track t;
+    int m, shown_at = -9999;
+    hud_cam_track_init(&t);
+    *on_from = *on_to = -9999;
+    for (m = from; m <= to; m += 5) {
+        hud_geo_fix f = fix_at(m, 0, heading);
+        hud_cam_track_update(&t, cams, n, &f);
+        if (t.active) { if (*on_from == -9999) *on_from = m; *on_to = m; }
+        if (m == at && t.active) shown_at = t.dist_m;
+    }
+    return shown_at;
+}
+
+static void test_cameras(void)
+{
+    hud_cam cams[8];
+    int n, a, b, d;
+    const char *txt = "# lat lon limit dir\n50.479648646 30.453529090 50 123\n  50.4 30.5 110 -1\nbad line\n91 30 50 0\n"
+                      "50.5 30.6 70\n50.5 30.6 70 360\n";
+    n = hud_cams_parse(txt, strlen(txt), cams, 8);
+    assert(n == 3);
+    assert(cams[0].lat_e6 == 50479649 && cams[0].lon_e6 == 30453529 && cams[0].limit == 50 && cams[0].dir == 123);
+    assert(cams[1].limit == 110 && cams[1].dir == -1 && cams[2].dir == -1 && cams[2].limit == 70);
+
+    /* a camera 1000 m up the road on our (right) side, watching northbound: on from 500 m before to 50 m after */
+    cams[0] = cam_at(1000, 8, 50, 0);
+    d = drive_north(cams, 1, 0, 1200, 0, 700, &a, &b);
+    assert(a == 500 && b == 1050 && d >= 295 && d <= 305);
+    /* the same camera watching southbound (the other carriageway's): never */
+    cams[0] = cam_at(1000, -8, 50, 180);
+    drive_north(cams, 1, 0, 1200, 0, 700, &a, &b);
+    assert(a == -9999);
+    /* a pair on an undivided road (the police list's 116 such cameras): only ours */
+    cams[0] = cam_at(1000, -9, 70, 180);
+    cams[1] = cam_at(1020, 9, 50, 0);
+    drive_north(cams, 2, 0, 1200, 0, 700, &a, &b);
+    assert(a == 520 && b == 1070);
+    {
+        hud_cam_track t;
+        hud_geo_fix f = fix_at(800, 0, 0);
+        hud_cam_track_init(&t);
+        assert(hud_cam_track_update(&t, cams, 2, &f) && t.active && t.idx == 1 && t.limit == 50);
+        f = fix_at(800, 0, -1);
+        f.valid = 0;   /* GPS gone stale: the alert ends */
+        assert(hud_cam_track_update(&t, cams, 2, &f) && !t.active);
+    }
+    /* no direction in the list: shown either way (until the open-data file gives one) */
+    cams[0] = cam_at(1000, 8, 90, -1);
+    drive_north(cams, 1, 0, 1200, 0, 700, &a, &b);
+    assert(a == 500);
+    /* a camera behind us or off to the side of our road: never */
+    cams[0] = cam_at(300, 200, 50, -1);
+    drive_north(cams, 1, 0, 1200, 0, 700, &a, &b);
+    assert(a == -9999);
+    /* no heading from CDS: the track gives one after 12 m */
+    cams[0] = cam_at(1000, 8, 50, 0);
+    drive_north(cams, 1, 0, 1200, -1, 700, &a, &b);
+    assert(a == 500 && b == 1050);
+    /* turning off before the camera: the alert ends once we are 60 m off its line */
+    {
+        hud_cam_track t;
+        int m;
+        hud_cam_track_init(&t);
+        for (m = 0; m <= 700; m += 5) { hud_geo_fix f = fix_at(m, 0, 0); hud_cam_track_update(&t, cams, 1, &f); }
+        assert(t.active);
+        for (m = 5; m <= 120 && t.active; m += 5) { hud_geo_fix f = fix_at(700, m, 90); hud_cam_track_update(&t, cams, 1, &f); }
+        assert(!t.active);
+    }
+
+    /* the pictures: every call valid, every point on the 120 x 72 canvas, polygons within the 51-point size proven on the car */
+    {
+        hud_palette pal;
+        hud_handles hh;
+        hud_batch bt;
+        int shown = 0, i, j, polys = 0, limits[3] = { 50, 110, 7 };
+        hud_palette_default(&pal);
+        pal.ink = 4;
+        hud_handles_default(&hh);
+        hh.buf[0] = 31;
+        hh.buf[1] = 32;
+        for (j = 0; j < 3; j++) {
+            hud_batch_init(&bt);
+            n = hud_cam_frame(&bt, &pal, 9, &hh, limits[j], j == 2 ? -20 : 320, &shown);
+            assert(n > 0 && n <= 18 && (unsigned)n == bt.n);
+            for (i = 0, polys = 0; i < n; i++) {
+                const hud_call *c = &bt.call[i];
+                assert(hud_call_valid(c));
+                if (c->fkt == 0x21D) {
+                    unsigned k, np = c->p[5];
+                    polys++;
+                    assert(np >= 3 && np <= 64);
+                    for (k = 0; k < np; k++) {
+                        int x = (int16_t)(c->p[6 + 4 * k] << 8 | c->p[7 + 4 * k]), y = (int16_t)(c->p[8 + 4 * k] << 8 | c->p[9 + 4 * k]);
+                        assert(x >= 0 && x < 120 && y >= 0 && y < 72);
+                    }
+                }
+            }
+            /* icon 7 + ring + digits (+ the distance bar before the camera) */
+            assert(polys == 7 + 1 + (limits[j] >= 100 ? 3 : limits[j] >= 10 ? 2 : 1) + (j == 2 ? 0 : 1));
+            assert(bt.call[1].fkt == 0x21B && bt.call[1].p[2] == 9);   /* the camera in the red */
+            assert(last(&bt)->fkt == 0x20E);
+        }
+        printf("camera alert: %d calls a frame\n", (int)bt.n);
+    }
+    /* with the bar: the badge and the limit replace the revs' readout; the gear in the red past the Shift point */
+    {
+        hud_profile p;
+        hud_palette pal;
+        hud_geom g;
+        hud_handles hh;
+        hud_anim an;
+        hud_batch b0, b1;
+        int shown = 0, i, red_pens = 0;
+        hud_profile_b58(&p);
+        hud_palette_default(&pal);
+        pal.base_on = pal.yellow_on = pal.red_on = pal.ink = 4;
+        pal.base_off = pal.yellow_off = pal.red_off = 3;
+        pal.alert = 9;
+        hud_geom_split(&g, 120, 72);
+        hud_handles_default(&hh);
+        hh.buf[0] = 31;
+        hh.buf[1] = 32;
+        hud_anim_reset(&an);
+        for (i = 0; i < 200; i++) hud_anim_step(&an, 3200, (uint32_t)(i * 25));
+        an.gear = 3;
+        hud_batch_init(&b0);
+        assert(hud_strip_frame(&b0, &p, &pal, &g, &hh, &an, &shown) > 0);
+        an.cam_limit = 110;
+        hud_batch_init(&b1);
+        assert(hud_strip_frame(&b1, &p, &pal, &g, &hh, &an, &shown) > 0);
+        /* 3200 shows four digits, 110 three, plus the badge's five shapes and one pen each way */
+        assert(b1.n == b0.n - 4 + 5 + 3 + 2);
+        for (i = 0; i < (int)b1.n; i++) if (b1.call[i].fkt == 0x21B && b1.call[i].p[2] == 9) red_pens++;
+        assert(red_pens == 1 && b1.n <= 24);
+        {
+            hud_strip_key k0, k1;
+            k1 = hud_strip_key_of(&p, &g, &an);
+            an.cam_limit = 0;
+            k0 = hud_strip_key_of(&p, &g, &an);
+            assert(!hud_strip_key_equal(&k0, &k1) && k1.rpm == -1 && k1.cam_limit == 110);
+        }
+        /* past the Shift point the blinking gear is red; without a known red it stays in the ink (today's look) */
+        an.gear_alert = 1;
+        hud_batch_init(&b1);
+        assert(hud_strip_frame(&b1, &p, &pal, &g, &hh, &an, &shown) > 0);
+        for (i = 0, red_pens = 0; i < (int)b1.n; i++) if (b1.call[i].fkt == 0x21B && b1.call[i].p[2] == 9) red_pens++;
+        assert(red_pens == 1);
+        pal.alert = 0;
+        hud_batch_init(&b1);
+        assert(hud_strip_frame(&b1, &p, &pal, &g, &hh, &an, &shown) > 0);
+        for (i = 0, red_pens = 0; i < (int)b1.n; i++) if (b1.call[i].fkt == 0x21B && b1.call[i].p[2] == 9) red_pens++;
+        assert(red_pens == 0);
+        printf("split layout with a camera: %u calls\n", (unsigned)b1.n);
+    }
+    /* CDS: the car's JSON position and heading into the GPS frame (names and format still to be seen on the car) */
+    {
+        hud_cds_geo geo;
+        struct geo_frame gf;
+        hud_cds_prop pr[4];
+        double v;
+        const char *cfg = "navigation.GPSPosition gps 500\nnavigation.GPSExtendedInfo heading 500\n";
+        memset(&geo, 0, sizeof geo);
+        geo.heading = -1;
+        assert(hud_cds_parse(cfg, strlen(cfg), pr, 4) == 2 && pr[0].kind == HUD_CDS_GPS && pr[1].kind == HUD_CDS_HEADING);
+        assert(!hud_cds_geo_frame(&geo, 5, &gf));
+        assert(hud_cds_json_num("{\"a\":1,\"latitude\": 50.4501}", "latitude", &v) && v > 50.45 && v < 50.4502);
+        assert(!hud_cds_json_num("{\"platitude\":1}", "latitude", &v));
+        assert(!hud_cds_geo_take(&geo, HUD_CDS_GPS, "{\"GPSPosition\":{\"latitude\":0,\"longitude\":0}}"));
+        assert(hud_cds_geo_take(&geo, HUD_CDS_GPS, "{\"GPSPosition\":{\"latitude\":50.479649,\"longitude\":30.453529,\"altitude\":171}}"));
+        assert(hud_cds_geo_take(&geo, HUD_CDS_HEADING, "{\"GPSExtendedInfo\":{\"altitude\":171,\"heading\":359.7,\"speed\":12}}"));
+        assert(hud_cds_geo_frame(&geo, 5, &gf) && gf.magic == GEO_MAGIC && gf.lat_e6 == 50479649 && gf.lon_e6 == 30453529);
+        assert(gf.heading == 0 && sizeof gf == 40 && sizeof(struct drive_frame) == 32);
+        {
+            struct drive_frame df;
+            assert(!hud_cds_frame(HUD_CDS_GPS, 50, 5, &df));
+        }
+    }
+    /* settings: cameras on by default, red unknown */
+    {
+        hud_settings st;
+        hud_settings_default(&st);
+        assert(st.cameras == 1 && st.red == 0);
+        assert(hud_settings_parse(&st, "cameras=0\nred=9\nred=300\n", 24) == 2 && st.cameras == 0 && st.red == 9);
+    }
+}
+
 int main(void) {
     test_proto();
     test_fields();
@@ -1080,6 +1296,7 @@ int main(void) {
     test_gear();
     test_cds();
     test_split();
+    test_cameras();
     puts("hud tests passed");
     return 0;
 }

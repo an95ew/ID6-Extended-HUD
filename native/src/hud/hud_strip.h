@@ -21,7 +21,8 @@ enum { HUD_BACKS_FILL, HUD_BACKS_NONE, HUD_BACKS_OUTLINE };
 /* shift_on (0 = the zone colours) lights the whole bar in one colour from the shift point: the HUD has no red, so the
    cue is dim -> bright (run 3: 3 looks red-orange at night, 4 white). backs: how unlit fields show; NONE when the lit
    colour is the unlit one, OUTLINE draws them in line colour base_off with fill 0 (untested on the car). */
-typedef struct { uint8_t base_off, base_on, yellow_off, yellow_on, red_off, red_on, ink, shift_on; int backs; } hud_palette;
+/* alert (0 = none known): the red the owner asked for (2026-11-19) for the gear's blink and the camera; settings red=N. */
+typedef struct { uint8_t base_off, base_on, yellow_off, yellow_on, red_off, red_on, ink, shift_on; int backs; uint8_t alert; } hud_palette;
 
 /* Layout in HUD canvas units. Defaults come from the design gallery's 480x180 canvas. */
 typedef struct {
@@ -51,10 +52,12 @@ typedef struct {
     uint32_t now_ms;
     int have;
     int gear;                        /* 0 hides it */
+    int gear_alert;                  /* past the Shift point: the gear in pal->alert (when one is known) */
+    int cam_limit;                   /* >0: a camera alert, the badge in the gap and its limit in the revs' place */
 } hud_anim;
 
 /* What a frame looks like; equal keys draw identical frames, so the frame can be skipped. */
-typedef struct { int full, partial_px, flash_on, shifting, peak_field, gear, rpm; } hud_strip_key;
+typedef struct { int full, partial_px, flash_on, shifting, peak_field, gear, rpm, gear_alert, cam_limit; } hud_strip_key;
 
 void hud_profile_b58(hud_profile *p);
 /* Moves the zones with the bar's end (the shift point): yellow 2000 below it, red 1000 below it. */

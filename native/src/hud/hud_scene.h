@@ -20,6 +20,8 @@ typedef struct {
     int blink_rpm;        /* menu: Shift point. The gear blinks from here (owner 2026-11-18: 6200..6600, default 6400) */
     int in_flight;        /* HUD calls awaiting an answer, 1..32 (the factory's 3); tuned on the car, no menu row */
     int merge_pts;        /* points per merged polygon, 0 = one per outline, -1 = the layout's; tuned on the car */
+    int cameras;          /* speed-camera alerts (story speed-cameras), on unless cameras=0; needs cameras.txt and GPS */
+    int red;              /* the HUD's red as a fill index, 0 = none known (owner 2026-11-19: gear blink, 6000+ zone, camera) */
     hud_text_style text;  /* lang=uk|en|de|pl, text=native|latin, street_max=8..32 */
 } hud_settings;
 
