@@ -154,6 +154,43 @@ STEPS = {
                 "--palette", "4,4,4,4,4,4,4", "--seconds", "45"], 45,
                "Video: OEM-like? Roundabout reads? Which lane to take is clear? Shade around our picture?",
                ("handles", "canvas")),
+    # Car run 6 (2026-11-19): latency. The split bar merged into ~7 calls a frame (one polygon per colour and baseline,
+    # up to 58 points: run 4 never sent more than 18), then wider windows. --log stamps every tx/rx with t=ms.
+    "W1": Step("split bar merged (~7 calls a frame), window 3, pull 1st-5th", "ours",
+               ["--draw-parked", "--trace", "pull", "--layout", "split", "--flash-ms", "0", "--palette", "3,4,3,4,3,4,4",
+                "--shift-colour", "4", "--backs", "fill", "--log", "--seconds", "30"], 30,
+               "Video: every field, the gear and all RPM digits there (0/6/8/9 with holes)? Any thin line along the bar's or the"
+               " digits' bottom edge between the pieces?", ("handles", "canvas")),
+    "W1b": Step("as W1, one polygon per piece (fallback if W1 draws wrong)", "ours",
+                ["--draw-parked", "--trace", "pull", "--layout", "split", "--flash-ms", "0", "--palette", "3,4,3,4,3,4,4",
+                 "--shift-colour", "4", "--backs", "fill", "--merge", "0", "--log", "--seconds", "30"], 30,
+                "Video: same picture as W1 should have been?", ("handles", "canvas")),
+    "W4": Step("a polygon per digit (no line gear-RPM), 16 calls in flight, revs held past 6400 for 2.5 s per gear", "ours",
+               ["--draw-parked", "--trace", "pull", "--shift-hold", "2500", "--layout", "split", "--flash-ms", "0",
+                "--palette", "3,4,3,4,3,4,4", "--shift-colour", "4", "--backs", "fill", "--in-flight", "16", "--log",
+                "--seconds", "40"], 40,
+               "Video: no line between the gear and the RPM? Does the gear blink while the revs are held?", ("handles", "canvas")),
+    "W4n": Step("as W4 without --log (does per-call logging over SSH slow the loop?)", "ours",
+                ["--draw-parked", "--trace", "pull", "--shift-hold", "2500", "--layout", "split", "--flash-ms", "0",
+                 "--palette", "3,4,3,4,3,4,4", "--shift-colour", "4", "--backs", "fill", "--in-flight", "16",
+                 "--seconds", "40"], 40, "Video: smoother than W4?", ("handles", "canvas")),
+    "W5": Step("pipelined frames (next frame starts once the last is all sent), 32 in flight, revs held 2.5 s per gear", "ours",
+               ["--draw-parked", "--trace", "pull", "--shift-hold", "2500", "--layout", "split", "--flash-ms", "0",
+                "--palette", "3,4,3,4,3,4,4", "--shift-colour", "4", "--backs", "fill", "--in-flight", "32", "--pipeline",
+                "--seconds", "40"], 40, "Video: twice as smooth as W4n? Anything garbled, flicker or a half-drawn frame?",
+               ("handles", "canvas")),
+    "W5l": Step("as W5 with --log, 15 s (raw lines: answers in order, no strays)", "ours",
+                ["--draw-parked", "--trace", "pull", "--shift-hold", "2500", "--layout", "split", "--flash-ms", "0",
+                 "--palette", "3,4,3,4,3,4,4", "--shift-colour", "4", "--backs", "fill", "--in-flight", "32", "--pipeline",
+                 "--log", "--seconds", "15"], 15, "-", ("handles", "canvas")),
+    "W2": Step("as W1, 8 calls in flight", "ours",
+               ["--draw-parked", "--trace", "pull", "--layout", "split", "--flash-ms", "0", "--palette", "3,4,3,4,3,4,4",
+                "--shift-colour", "4", "--backs", "fill", "--in-flight", "8", "--log", "--seconds", "30"], 30,
+               "Video: smoother than W1? Anything missing or garbled?", ("handles", "canvas")),
+    "W3": Step("as W1, 16 calls in flight", "ours",
+               ["--draw-parked", "--trace", "pull", "--layout", "split", "--flash-ms", "0", "--palette", "3,4,3,4,3,4,4",
+                "--shift-colour", "4", "--backs", "fill", "--in-flight", "16", "--log", "--seconds", "30"], 30,
+               "Video: as W2?", ("handles", "canvas")),
 }
 SETTABLE = {
     "palette": re.compile(r"(default|\d{1,3}(,\d{1,3}){6})"),
@@ -229,6 +266,22 @@ def parse_log(text):
     if stats:
         e, t, last, mx = stats[-1]
         found["stats"] = f"errors {e}, timeouts {t}, batch {last} ms (max {mx})"
+    # Car run 6: --log stamps tx/rx with t=ms. Each answer pairs with the oldest unanswered call of its function and
+    # handle; the spread says whether a wider window keeps the per-call time (latency-bound) or stretches it.
+    rtts, waiting = [], {}
+    for line in text.splitlines():
+        tx = re.match(r"\[hud\] tx ([0-9A-F]{3}) \S+ (\d+) \d+ [0-9a-f]* t=(\d+)$", line)
+        rx = re.match(r"\[hud\] rx ([0-9A-F]{3}) op [CD9F] len \d+:((?: [0-9a-f]{2})*) t=(\d+)$", line)
+        if tx:
+            waiting.setdefault((tx.group(1), int(tx.group(2))), []).append(int(tx.group(3)))
+        elif rx:
+            b = rx.group(2).split()
+            key = (rx.group(1), int(b[0] + b[1], 16) if len(b) >= 2 else 0)
+            if waiting.get(key):
+                rtts.append(int(rx.group(3)) - waiting[key].pop(0))
+    if rtts:
+        rtts.sort()
+        found["call_ms"] = f"{len(rtts)} calls: median {rtts[len(rtts) // 2]} ms, max {rtts[-1]} ms"
     flags = [w for w in ("refused", "no answer", "profile mismatch", "MOST link lost", "breaks a limit") if w in text]
     # Our worker's summary lines. More rx lines than counted answers means the sender dropped them (car run 1).
     rx = len(re.findall(r"\[hud\] rx ", text))

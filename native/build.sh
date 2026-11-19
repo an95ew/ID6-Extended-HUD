@@ -27,11 +27,11 @@ c() { qcc -V4.4.2,gcc_ntoarmv7le -Wc,-std=c99 -Wall -Wextra -Werror "$@"; }
 cxx() { qcc -V4.4.2,gcc_ntoarmv7le_gpp -lang-c++ -Wc,-std=gnu++98 -Wall -Wextra -Werror "$@"; }
 
 c -Isrc -O2 -fPIC -c src/gauge_core.c -o out/core.o
-for f in hud_app hud_scene hud_text; do
+for f in hud_app hud_scene hud_text hud_cds; do
     c -Isrc -Isrc/hud -O2 -fPIC -c "src/hud/$f.c" -o "out/$f.o"
 done
 cxx -Isrc -Isdk -O2 -fno-strict-aliasing -fno-exceptions -fPIC -shared src/extended_hud.cpp out/core.o \
-    out/hud_app.o out/hud_scene.o out/hud_text.o \
+    out/hud_app.o out/hud_scene.o out/hud_text.o out/hud_cds.o \
     "$frameworks/libAppFramework.A.so" "$frameworks/libCoreFramework.A.so" -Lout -lm -lsocket \
     -Wl,--allow-shlib-undefined -Wl,-soname,libExtendedHUD.so -o out/libExtendedHUD.so
 shasum -a 256 out/libExtendedHUD.so 2>/dev/null || sha256sum out/libExtendedHUD.so

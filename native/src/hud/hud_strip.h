@@ -34,6 +34,8 @@ typedef struct {
     int rise;                        /* red fields stand this much taller, yellow half: the HUD has no red (run 3) */
     int rpm_x1, rpm_h;               /* RPM readout, right-aligned at rpm_x1, bottom on the gear's; rpm_h 0 hides it */
     int solid_digits;                /* 1: each digit is one polygon (holes as keyholes), 0: one polygon per segment */
+    int merge_pts;                   /* >0: outlines of one colour that share a bottom line go out as one polygon of at
+                                        most this many points (a call costs ~260 ms / window on the car); 0: one each */
 } hud_geom;
 
 typedef struct {
@@ -65,7 +67,7 @@ void hud_geom_for_canvas(hud_geom *g, int canvas_w, int canvas_h);
    120x72), where the scaled default uses only a sixth of it. */
 void hud_geom_big(hud_geom *g, int canvas_w, int canvas_h);
 /* The split layout (2026-11-18): the strip as in the big one, under it the gear on the left and the RPM on the right,
-   every digit one polygon, so the readout costs a call per digit. */
+   every digit one polygon, merged (merge_pts 99): a frame is ~7 calls whatever the revs. */
 void hud_geom_split(hud_geom *g, int canvas_w, int canvas_h);
 void hud_handles_default(hud_handles *h);
 /* The RPM the readout shows: to the nearest 50, as the car draws one frame per ~2 s. */

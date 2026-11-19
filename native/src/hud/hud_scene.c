@@ -10,6 +10,9 @@ void hud_settings_default(hud_settings *s)
     s->always = 0;
     s->nav = 1;
     s->shift_rpm = 7000;
+    s->blink_rpm = 6400;
+    s->in_flight = 32;   /* car run 6 W5: two overlapping frames (up to 12 calls each), 161 ms a frame, 0 errors */
+    s->merge_pts = -1;
     hud_text_style_default(&s->text);
 }
 
@@ -34,6 +37,9 @@ int hud_settings_parse(hud_settings *s, const char *text, size_t len)
         { "nav", offsetof(hud_settings, nav), 0, 1 },
         { "shift_rpm", offsetof(hud_settings, shift_rpm), 4000, 7500 },
         { "street_max", offsetof(hud_settings, text.street_max), 8, HUD_TEXT_UNITS },
+        { "blink_rpm", offsetof(hud_settings, blink_rpm), 4000, 7500 },
+        { "in_flight", offsetof(hud_settings, in_flight), 1, 32 },   /* HUD_MAX_IN_FLIGHT */
+        { "merge_pts", offsetof(hud_settings, merge_pts), -1, 99 },
     };
     size_t i = 0;
     int taken = 0;
@@ -70,9 +76,10 @@ int hud_settings_parse(hud_settings *s, const char *text, size_t len)
 int hud_settings_format(const hud_settings *s, char *out, size_t cap)
 {
     return snprintf(out, cap, "sport_bar=%d\nalways=%d\nnav=%d\nshift_rpm=%d\n"
-                    "lang=%s\ntext=%s\nstreet_max=%d\n",
+                    "lang=%s\ntext=%s\nstreet_max=%d\nblink_rpm=%d\nin_flight=%d\nmerge_pts=%d\n",
                     s->sport_bar, s->always, s->nav, s->shift_rpm, hud_lang_name(s->text.lang),
-                    s->text.script == HUD_SCRIPT_LATIN ? "latin" : "native", s->text.street_max);
+                    s->text.script == HUD_SCRIPT_LATIN ? "latin" : "native", s->text.street_max, s->blink_rpm, s->in_flight,
+                    s->merge_pts);
 }
 
 hud_scene hud_scene_select(const hud_settings *s, const hud_state *st)

@@ -31,7 +31,8 @@ enum {
     HUD_MAX_TEXT    = 32,           /* UTF-16 units before the terminator */
     HUD_MAX_PAYLOAD = 6 + 4 * HUD_MAX_POINTS,
     HUD_MAX_CALLS   = 48,           /* per batch */
-    HUD_IN_FLIGHT   = 3,            /* calls awaiting an answer */
+    HUD_IN_FLIGHT   = 3,            /* calls awaiting an answer: the factory sender's window */
+    HUD_MAX_IN_FLIGHT = 32,         /* the most --in-flight takes (car run 6: 12 in flight answered cleanly; 32 untested) */
     HUD_POLY_KIND   = 3             /* the kind tachBand uses; 2 is also accepted */
 };
 

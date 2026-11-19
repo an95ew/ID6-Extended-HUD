@@ -32,13 +32,14 @@ failed in run 4, so draw everything as filled polygons.
 
 | Rule | Value | |
 |---|---|---|
-| Per call | ~65 ms with 3 in flight | [car] |
-| Per frame | 20–24 calls take 1.3–1.85 s, so about **one frame every 1.5–2 s** | [car] |
+| Per call | ~250 ms to the answer, **whatever the window** (3..32 in flight) | [car] run 6 |
+| Per frame | ≤ 12 calls, two frames overlapping, window 32: **~160 ms, about 6 frames a second** (run 5: 1.5–2 s) | [car] run 6 |
 | Batch | at most **48 calls**, 1.5 s per-call timeout, 5 s batch deadline | [static] |
-| Blink | not usable: a 2 s blink works but the owner found it useless | [car] |
+| Polygon | 51 points (198 B) accepted; the HUD draws the **edges** too, so merge only pieces that touch | [car] run 6 |
+| Blink | the gear flips once per frame past the Shift point (~3 Hz at 6 frames a second) | [car] run 6 |
 
-Design for it: every frame is RemoveAll, one pen per colour, one call per polygon, then the switch. Keep a frame
-near 24 calls. Whole concave polygons fill cleanly (the nav arrows), so one shape is one call. [car]
+Design for it: every frame is RemoveAll, one pen per colour, the bar's pieces merged per colour, each digit its own
+polygon, then the switch. Keep a frame near 12 calls. Whole concave polygons fill cleanly (the nav arrows). [car]
 
 ## The Sport Bar
 

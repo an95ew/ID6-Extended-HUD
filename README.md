@@ -4,6 +4,12 @@ Standalone BMW NBT Evo (iDrive 6) plugin and native QNX HUD worker that renders 
 
 Tested on an F34 340i (B58), NBT Evo firmware `NBTevo_X20511I`, split-node unit (`hu-jacinto` SSH / `hu-omap` HMI).
 
+Highlights:
+- About **6 frames a second** on the factory HUD (pipelined MOST calls, ~160 ms a frame).
+- Car data from the HMI's car data service (CDS): revs every ~100 ms, the real gear (shown in D/S/M, hidden in P/N/R) and the driving
+  mode (Sport/Sport+ only unless "Always" is ticked). Never estimated.
+- Gear blinks past a configurable Shift point (6,200–6,600 rpm).
+
 ## Special thanks
 
 Special thanks to [inotbarnacle](https://github.com/inotbarnacle), the author of [ID6_apps_prerelease](https://github.com/inotbarnacle/ID6_apps_prerelease/tree/main). His findings and documentation were used to build and provide this plugin.

@@ -23,11 +23,18 @@ void hud_app_load(hud_settings *s, const char *dir);
 int hud_app_save(const hud_settings *s, const char *dir);
 /* Flips one menu item. "Always" only while Sport Bar is ticked (owner, 2026-11-18: it greys out). */
 void hud_app_toggle(hud_settings *s, hud_app_item item);
+/* The Shift point page's values (owner 2026-11-18), in menu order. */
+enum { HUD_APP_BLINK_CHOICES = 5 };
+extern const int hud_app_blink_rpm[HUD_APP_BLINK_CHOICES];
+/* Takes choice i (0..4) of the Shift point page; anything else leaves the setting. */
+void hud_app_set_blink(hud_settings *s, int i);
+/* The Shift point page's label, e.g. "Gear blinks from 6,400 RPM". */
+void hud_app_blink_label(const hud_settings *s, char *out, size_t cap);
 /* The worker runs (and polls the engine) only while something is ticked. */
 int hud_app_wants_worker(const hud_settings *s);
 /* Another HUD sender installed next to ours (two senders freeze the HUD: home repo #22/#27): its folder name, or NULL. */
 const char *hud_app_conflict(const char *plugins_dir);
-/* The worker's command line, the run-4 design (car runs T2 + T3, frozen 2026-11-18). argv points into buf. Returns argc, or
+/* The worker's command line, the split Sport Bar (approved 2026-11-18). argv points into buf. Returns argc, or
    -1 if it does not fit. */
 int hud_app_worker_argv(const char *dir, const char *gateway, char *buf, size_t cap, const char **argv, int max);
 /* The menu's status line. */

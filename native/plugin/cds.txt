@@ -1,0 +1,5 @@
+# Car run 6: CDS feeds the HUD worker (names found by the C1 probe on this car, X20511I).
+# Format: <property> <kind> [interval]; kinds log, rpm, kph, gear, mode. Interval 50 gave an update every ~100 ms.
+engine.RPMSpeed rpm 50
+driving.gear gear 50
+driving.mode mode 200

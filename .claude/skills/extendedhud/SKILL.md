@@ -15,9 +15,10 @@ HmiMain3D ── libExtendedHUD.so (menu shell, 1 s poll on the HMI thread)
                ▼
              hud-sportbar-qnx --draw-live …  ──DSI/MOST──▶ 82/02 HUD (handles 31/32, container 23, texts 26/27)
                │ posix_spawn (never fork: QNX refuses fork in a threaded process)
-               ▼                                 ▲ UDP 127.0.0.1:42873  struct drive_frame {sampled_ms, rpm, kph}
-             shift-deck-qnx --host GW --udp-port 42873
-               └─ OBD 01 0C (RPM) / 01 0D (speed) → DME 0x12, over HSFZ if the gateway answers, else the MOST tunnel
+               ▼                                 ▲ UDP 127.0.0.1:42873  struct drive_frame (32 B: sampled_ms, rpm, kph,
+             shift-deck-qnx --host GW --udp-port 42873 --gear --gear-every 2 --no-speed     gear_raw, mode_raw, source; -1 = not in it)
+               └─ in turns: OBD 01 0C (RPM) → DME 0x12, UDS 22 DA 2E (gear) → EGS 0x18; HSFZ if the gateway answers, else MOST
+   libExtendedHUD.so's CDS feed (cds.txt) sends drive_frame too, source CDS (wins while fresh)
 ```
 
 | Half | File | Holds |
@@ -39,17 +40,22 @@ sh .claude/skills/deploy-plugins/abi_check.sh out/libExtendedHUD.so
 
 ## Behaviour (what the owner sees)
 
-- `settings.txt` in the app folder: `sport_bar always nav shift_rpm lang text street_max`. The installed defaults are **all three ticked**
-  (`hud_app_defaults`), because the **driving mode is not wired** (`HUD_MODE_UNKNOWN`). Without Always the Sport Bar would never show,
-  since unknown mode = Comfort. The worker re-reads the file every second.
-- **Blank at idle is by design:** the strip lights from 1,000 rpm (`p->lo`), there are no unlit backs, and the gear digit is hidden at
-  0 km/h. Idle (~840 rpm) in P shows nothing. Blip to see it. [car]
+- `settings.txt` in the app folder: `sport_bar always nav shift_rpm lang text street_max blink_rpm in_flight merge_pts`. The worker
+  re-reads it every second.
+- **Car data = CDS** (run 6, `cds.txt` shipped): `engine.RPMSpeed` (~100 ms), `driving.gear` (1 N, 2 R, 3 P, 5.. = 1st..), `driving.mode`
+  (3 Comfort, 4 Sport, 5 Sport+, 7 Eco Pro); maps in `hud_gear.c`. CDS sends on change only: the plugin repeats the last values every
+  poll. While CDS is fresh the collector's OBD values are ignored (`hud_live_feed`); the collector is the fallback.
+- **The gear: D/S/M only, hidden in P/N/R, never estimated**; unmapped raw values show nothing and keep the bar off.
+- **Speed:** a frame ≤ 12 calls (bar merged per colour, a polygon per digit: the HUD draws edges, joins across gaps showed as a
+  line). `--pipeline` (in the app's argv) overlaps two frames; `in_flight` default 32. Car: ~160 ms a frame. The stats line has `lag`.
+  Measure frame rate without `--log` (per-byte stderr over SSH slows the loop by a third).
+- **Driving mode:** `hud_live_mode` → `hud_scene_select` (Sport/Sport+ without Always).
 - "Always show Sport Bar" only works with Sport Bar ticked: `hud_app_toggle` ignores it, and the shell sets the checkbox's
   **property 1 (ENABLED, greys it)** and **2 (SELECTABLE)**. Property 2 alone made it unselectable but not grey (car). 1 is from BMW's
   RHMI numbering (IDriveConnectKit); confirm on the car. 3 = VISIBLE (BoostDeck uses it).
 - The worker runs only while Sport Bar or Navigation is ticked. Unticking both stops it with SIGTERM, and it clears its picture.
 - Refuses to start next to HudTest (`hud_app_conflict`). Two HUD senders freeze the HUD.
-- Revs older than **2 s** count as stale (`HUD_DRIVE_STALE_MS`). Over MOST one RPM+speed frame takes ~550 ms, and the old 750 ms made the scene flap.
+- Revs older than **2 s** count as stale (`HUD_DRIVE_STALE_MS`). Over MOST one OBD RPM read takes ~260 ms; CDS is ~100 ms.
 - **Navigation shows nothing live:** there is no CarPlay turn source yet (`route_active` never set). See
   `.claude/stories/hud-redesign/carplay-nav-source.md`, and ask the owner which option before working on it.
 
@@ -74,7 +80,8 @@ Collector trace: `SHIFTDECK_TRACE=1` in its environment prints the raw MOST exch
 
 **A new checkbox:** XML `raAction`, `raBoolModel`, `checkbox` (ids from `check_app.py`'s "free from"); a setting in `hud_settings` +
 `hud_settings_parse/format`; `hud_app_toggle` + test; a constant, handler and `updateModel` in `extended_hud.cpp`; extend `check_app.py`'s
-`want` table. **A new worker flag:** `hud_app_worker_argv` (`k_fixed`) + the argv assertions in `test_app()`. The look is frozen: ask the owner.
+`want` table. **A new worker flag:** `hud_app_worker_argv` (`k_fixed`) + the argv assertions in `test_app()`. A knob to tune on the car: a
+`settings.txt` key instead (`hud_settings_parse/format`, read by the worker every second). The look: ask the owner.
 
 **Ship a build to the car:** follow deploy-plugins § "Update a file of an installed app" (new name, hash readback, `mv` over the old one,
 then a knob restart). Never `cat >` over the loaded `.so` or over the running worker.

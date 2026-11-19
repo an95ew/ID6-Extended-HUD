@@ -271,5 +271,17 @@ class CarRunTest(unittest.TestCase):
             self.assertIn("sha256", str(e.exception))
 
 
+
+class CallTimesTest(unittest.TestCase):
+    def test_round_trip_per_call_from_stamped_log(self):
+        # Car run 6 log shape (worker --log, 2026-11-18): tx/rx with t=ms; answers matched by function and handle.
+        log = ("[hud] tx 220 ImageRemoveAllItems 32 2 0020 t=100\n"
+               "[hud] tx 21B ImageSetFillColor 32 3 002003 t=101\n"
+               "[hud] rx 220 op D len 2: 00 20 t=360\n"
+               "[hud] tx 21D ImageAddPolygon 32 22 0020000103040009 t=361\n"
+               "[hud] rx 21B op D len 3: 00 20 03 t=370\n"
+               "[hud] rx 21D op D len 22: 00 20 00 01 t=640\n")
+        self.assertEqual(parse_log(log)["call_ms"], "3 calls: median 269 ms, max 279 ms")
+
 if __name__ == "__main__":
     unittest.main()

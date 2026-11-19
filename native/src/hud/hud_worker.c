@@ -39,9 +39,6 @@
 
 extern char **environ;
 
-/* Over the MOST tunnel one RPM + speed frame takes ~550 ms (car 2026-11-18), so drive_frame.h's 750 ms made the
-   scene flap between the bar and nothing. The HUD keeps the last frame for 2 s. */
-enum { HUD_DRIVE_STALE_MS = 2000 };
 #include <string.h>
 #include <sys/socket.h>
 #include <sys/wait.h>
@@ -51,6 +48,7 @@ enum { HUD_DRIVE_STALE_MS = 2000 };
 #include "hud_most.h"
 #include "hud_nav.h"
 #include "hud_nav_demo.h"
+#include "hud_gear.h"
 #include "hud_rg.h"
 #include "hud_scene.h"
 #include "hud_sender.h"
@@ -70,6 +68,7 @@ static struct {
     const char *trace, *settings, *collector, *host, *rg_file;
     int rtt, seconds, udp_port, first, last, log, nav, most_inst, container;
     int swatch_n, swatch_pages, swatch_line, big, trace_set, shift_hold, text_visible, text_hide, pen_reset, nhide;
+    int in_flight, merge, gear_every, pipeline;   /* 0: the defaults (HUD_IN_FLIGHT, the layout's merging, the collector's) */
     uint16_t hide[8];
     const char *show;   /* how --grid/--swatches bring the image up: switch, set or both */
     hud_profile prof;
@@ -120,7 +119,8 @@ static int usage(void)
           " [--static-handle N] [--text-handles S,D] [--palette b0,b1,y0,y1,r0,r1,ink] [--settings FILE] [--rg-file PATH]"
           " [--collector PATH --host IP] [--show switch|set|both] [--container N] [--log]"
           " [--swatch-n N --swatch-pages P --swatch-line] [--layout big|split] [--flash-ms N] [--shift-hold MS]"
-          " [--shift-colour N] [--backs fill|none|outline] [--text-visible] [--text-clear] [--text-hide] [--pen-reset] [--hide H,H,...]\n", stderr);
+          " [--shift-colour N] [--backs fill|none|outline] [--text-visible] [--text-clear] [--text-hide] [--pen-reset] [--hide H,H,...]"
+          " [--in-flight N] [--pipeline] [--merge PTS] [--gear-every N]\n", stderr);
     return 2;
 }
 
@@ -203,6 +203,12 @@ static int parse_args(int argc, char **argv)
         else if (!strcmp(a, "--text-handles") && !parse_list(n, v, 2) && v[0] >= 1 && v[0] <= 255 && v[1] >= 1 &&
                  v[1] <= 255) { o.th.street = (uint16_t)v[0]; o.th.distance = (uint16_t)v[1]; i++; }
         else if (!strcmp(a, "--rtt") && !parse_list(n, v, 1) && v[0] <= 2000) { o.rtt = v[0]; i++; }
+        /* 2026-11-18 latency: calls awaiting an answer (the factory sends 3), points per merged polygon (0 = one per
+           outline), and how often the collector reads the gearbox instead of the DME */
+        else if (!strcmp(a, "--in-flight") && !parse_list(n, v, 1) && v[0] >= 1 && v[0] <= HUD_MAX_IN_FLIGHT) { o.in_flight = v[0]; i++; }
+        else if (!strcmp(a, "--merge") && !parse_list(n, v, 1) && v[0] <= HUD_MAX_POINTS) { o.merge = v[0] ? v[0] : -1; i++; }
+        else if (!strcmp(a, "--pipeline")) o.pipeline = 1;
+        else if (!strcmp(a, "--gear-every") && !parse_list(n, v, 1) && v[0] >= 1 && v[0] <= 20) { o.gear_every = v[0]; i++; }
         else if (!strcmp(a, "--seconds") && !parse_list(n, v, 1) && v[0] >= 1 && v[0] <= 3600) { o.seconds = v[0]; i++; }
         else if (!strcmp(a, "--udp-port") && !parse_list(n, v, 1) && v[0] >= 1) { o.udp_port = v[0]; i++; }
         else if (!strcmp(a, "--settings")) { o.settings = n; i++; }
@@ -224,6 +230,7 @@ static int parse_args(int argc, char **argv)
     if (o.swatch_n && o.first + o.swatch_n * o.swatch_pages > 256) return usage();
     if (o.big == 1) hud_geom_big(&o.geom, o.geom.canvas_w, o.geom.canvas_h);
     if (o.big == 2) hud_geom_split(&o.geom, o.geom.canvas_w, o.geom.canvas_h);
+    if (o.merge) o.geom.merge_pts = o.merge < 0 ? 0 : o.merge;
     return 0;
 }
 
@@ -268,7 +275,7 @@ static void trace_at(const char *name, uint32_t t, double *rpm, double *kph)
 /* ---- host simulation ---- */
 
 typedef struct { uint16_t fkt; uint8_t p[2]; uint32_t due; } sim_answer;
-static sim_answer g_sim[HUD_IN_FLIGHT * 4];
+static sim_answer g_sim[HUD_MAX_IN_FLIGHT * 4];
 static unsigned g_nsim;
 static uint32_t g_sim_now;
 
@@ -318,6 +325,17 @@ static const char *mode_name(hud_drive_mode m)
     default: return "unknown";
     }
 }
+
+/* The gear blinks from the Shift point (owner 2026-11-18: only the gear, 6200..6600, default 6400): past it every new frame
+   flips the digit, so it blinks as fast as the HUD takes frames. Returns what to draw; *off is the phase. */
+static hud_anim blink_view(const hud_anim *a, int blink_rpm, int off)
+{
+    hud_anim v = *a;
+    if (blink_rpm > 0 && a->rpm >= blink_rpm && off) v.gear = 0;
+    return v;
+}
+
+static int blink_next(const hud_anim *a, int blink_rpm, int off) { return blink_rpm > 0 && a->rpm >= blink_rpm ? !off : 0; }
 
 static const char *scene_name(hud_scene s)
 {
@@ -393,10 +411,12 @@ static int run_dump(void)
     hud_settings set;
     hud_state st;
     hud_scene scene, last_scene = HUD_SCENE_NONE;
-    int shown = 0, have_key = 0, story = !strcmp(o.trace, "drive"), drawn = 0;
+    int shown = 0, have_key = 0, story = !strcmp(o.trace, "drive"), drawn = 0, blink_off = 0, drawn_gear = 0;
     unsigned next_ev = 0;
     uint32_t t, end = (uint32_t)o.seconds * 1000u, frames = 0, route_start = 0;
     hud_sender_init(&s, sim_send, NULL);
+    if (o.in_flight) hud_sender_set_window(&s, (unsigned)o.in_flight);
+    hud_sender_set_pipeline(&s, o.pipeline);
     hud_anim_reset(&a);
     hud_settings_default(&set);
     set.text = o.text;
@@ -444,7 +464,7 @@ static int run_dump(void)
             } else i++;
         hud_sender_tick(&s, t);
         /* A new frame only when the last one is done and the picture changed. */
-        if (!hud_sender_idle(&s)) continue;
+        if (!hud_sender_ready(&s)) continue;
         hud_batch_init(&b);
         if (scene != last_scene) {   /* leaving a scene: take down what only it draws */
             if (last_scene == HUD_SCENE_NAV) hud_nav_clear(&b, &o.th, &nav_sent);
@@ -454,9 +474,12 @@ static int run_dump(void)
             last_scene = scene;
         }
         if (scene == HUD_SCENE_RPM) {
-            hud_strip_key k = hud_strip_key_of(&o.prof, &o.geom, &a);
+            hud_anim v = blink_view(&a, set.blink_rpm, blink_off);
+            hud_strip_key k = hud_strip_key_of(&o.prof, &o.geom, &v);
             if (!have_key || !hud_strip_key_equal(&k, &last_key)) {
-                if (hud_strip_frame(&b, &o.prof, &o.pal, &o.geom, &o.hh, &a, &shown) > 0) drawn = 1;
+                if (hud_strip_frame(&b, &o.prof, &o.pal, &o.geom, &o.hh, &v, &shown) > 0) drawn = 1;
+                blink_off = blink_next(&a, set.blink_rpm, blink_off);
+                drawn_gear = v.gear;
                 last_key = k;
                 have_key = 1;
             }
@@ -465,7 +488,7 @@ static int run_dump(void)
         }
         if (b.n) {
             hud_sender_submit(&s, &b, t);
-            print_batch(t, a.rpm, a.gear, scene, &b, &s);
+            print_batch(t, a.rpm, scene == HUD_SCENE_RPM ? drawn_gear : a.gear, scene, &b, &s);
             frames++;
         }
     }
@@ -477,12 +500,14 @@ static int run_dump(void)
 
 /* ---- car ---- */
 
+static uint32_t g_t0;   /* --log stamps every tx/rx with the ms since the worker started (car run 6 measures latency) */
+
 static void log_call(void *u, const hud_call *c)
 {
     char line[1024];
     (void)u;
     hud_call_format(c, line, sizeof line);
-    fprintf(stderr, "[hud] tx %s\n", line);
+    fprintf(stderr, "[hud] tx %s t=%u\n", line, now_ms() - g_t0);
 }
 
 static int car_send(void *u, const hud_call *c)
@@ -502,7 +527,7 @@ static void pump(hud_sender *s)
                 int k;
                 fprintf(stderr, "[hud] rx %03X op %X len %u:", ans[i].fkt, ans[i].op, ans[i].n);
                 for (k = 0; k < ans[i].n; k++) fprintf(stderr, " %02x", ans[i].p[k]);
-                fputc('\n', stderr);
+                fprintf(stderr, " t=%u\n", t - g_t0);
             }
             hud_sender_answer(s, ans[i].fkt, ans[i].op, ans[i].p, ans[i].n, t);
         }
@@ -537,16 +562,22 @@ static int open_udp(int port)
    collector never started). diagnostic_worker.h does the same with QNX spawn(). */
 static pid_t spawn_collector(void)
 {
-    char port[8];
-    char *argv[6];
+    char port[8], every[8];
+    char *argv[11];
     pid_t pid = -1;
     snprintf(port, sizeof port, "%d", o.udp_port);
+    snprintf(every, sizeof every, "%d", o.gear_every ? o.gear_every : 2);
     argv[0] = (char *)o.collector;
     argv[1] = "--host";
     argv[2] = (char *)o.host;
     argv[3] = "--udp-port";
     argv[4] = port;
-    argv[5] = NULL;
+    /* the real gear from the gearbox; speed is not drawn, so its request goes to the gear instead (2026-11-18) */
+    argv[5] = "--gear";
+    argv[6] = "--gear-every";
+    argv[7] = every;
+    argv[8] = "--no-speed";
+    argv[9] = NULL;
     if (posix_spawn(&pid, o.collector, NULL, NULL, argv, environ) != 0) pid = -1;
     if (pid < 0) fprintf(stderr, "[hud] collector %s: %s\n", o.collector, strerror(errno));
     return pid;
@@ -581,11 +612,17 @@ static int run_car(void)
     hud_nav_info nav;
     hud_nav_sent nav_sent;
     hud_strip_key last_key;
-    int shown = 0, have_key = 0, drawn = 0, fd = -1;
+    int shown = 0, have_key = 0, drawn = 0, fd = -1, blink_off = 0;
     pid_t child = -1;
     hud_rg_file rgf;
     hud_rg_track rgt;
-    uint32_t start, next_stats, last_frame_ms = 0, next_settings = 0, next_rg = 0;
+    uint32_t start, next_stats, next_settings = 0, next_rg = 0;
+    /* each value with the time it arrived (0 = never) and its source, as the collector and the plugin's CDS feed them */
+    hud_live live;
+    int cur_merge = -1, layout_merge = o.geom.merge_pts;
+    uint32_t last_sample = 0, lag_sample = 0, lag_last = 0, lag_max = 0;
+    unsigned lag_done = 0;
+    int lag_wait = 0;
     double rpm = 0, kph = 0;
     enum hud_most_rc rc;
     hud_most_set_instance((uint8_t)o.most_inst);
@@ -597,14 +634,17 @@ static int run_car(void)
     }
     fprintf(stderr, "[hud] 82/%02X up, host %04X\n", o.most_inst, hud_most_host());
     hud_sender_init(&s, car_send, NULL);
+    if (o.in_flight) hud_sender_set_window(&s, (unsigned)o.in_flight);
+    hud_sender_set_pipeline(&s, o.pipeline);
     hud_settings_default(&set);
     set.text = o.text;   /* until a settings file says otherwise */
     hud_rg_file_init(&rgf, o.rg_file);
     hud_rg_track_init(&rgt);
     hud_anim_reset(&a);
+    hud_live_init(&live);
     memset(&nav, 0, sizeof nav);
     memset(&nav_sent, 0, sizeof nav_sent);
-    start = next_stats = now_ms();
+    start = next_stats = g_t0 = now_ms();
 
     if (o.mode == M_SIZE) {
         hud_batch_init(&b);
@@ -716,14 +756,30 @@ static int run_car(void)
                 struct drive_frame f;
                 hud_state st;
                 while (fd >= 0 && recv(fd, &f, sizeof f, 0) == (ssize_t)sizeof f) {
-                    rpm = f.rpm;
-                    kph = f.kph;
-                    last_frame_ms = t;
+                    if (f.rpm >= 0) last_sample = (uint32_t)f.sampled_ms;   /* the collector's CLOCK_MONOTONIC, same node */
+                    if (hud_live_feed(&live, &f, t))
+                        fprintf(stderr, "[hud] driving mode raw %d from %s: %s\n", f.mode_raw,
+                                f.source == DRIVE_SRC_CDS ? "CDS" : "OBD", mode_name(hud_live_mode(&live, t)));
                 }
-                if ((int32_t)(t - next_settings) >= 0) { read_settings(&set); next_settings = t + 1000; }
+                if ((int32_t)(t - next_settings) >= 0) {
+                    read_settings(&set);
+                    next_settings = t + 1000;
+                    /* the latency knobs (car run 6 tunes them in settings.txt); a command-line value wins */
+                    if (!o.in_flight && s.window != (unsigned)set.in_flight) {
+                        hud_sender_set_window(&s, (unsigned)set.in_flight);
+                        fprintf(stderr, "[hud] in flight: %u\n", s.window);
+                    }
+                    if (!o.merge && set.merge_pts != cur_merge) {
+                        cur_merge = set.merge_pts;
+                        o.geom.merge_pts = cur_merge < 0 ? layout_merge : cur_merge;
+                        have_key = 0;
+                        fprintf(stderr, "[hud] merge: %d points\n", o.geom.merge_pts);
+                    }
+                }
                 hud_profile_for_shift(&o.prof, set.shift_rpm);
                 memset(&st, 0, sizeof st);
-                st.mode = HUD_MODE_UNKNOWN;          /* the driving mode signal is not wired yet */
+                /* unknown (no source, or a value not mapped yet) counts as Comfort: the bar needs Always */
+                st.mode = hud_live_mode(&live, t);
                 if ((int32_t)(t - next_rg) >= 0) {   /* the CarPlay route (librghook's file) */
                     int was = rgt.route_active;
                     if (hud_rg_file_poll(&rgf)) hud_rg_track_update(&rgt, rgf.present ? &rgf.rg : NULL);
@@ -735,19 +791,30 @@ static int run_car(void)
                 st.route_active = rgt.route_active;
                 if (rgt.route_active) nav = rgt.nav;
                 scene = hud_scene_select(&set, &st);
-                /* the Sport Bar needs fresh engine frames; the nav scene does not */
-                if (scene == HUD_SCENE_RPM && !(last_frame_ms && t - last_frame_ms < HUD_DRIVE_STALE_MS)) scene = HUD_SCENE_NONE;
-                a.gear = hud_gear_estimate(rpm, kph);
+                /* Owner 2026-11-18: the bar only with the engine running and the gearbox in D, S or M, from the car's own
+                   values; engine off (0 rpm), P, N, R, a gearbox value not mapped yet or no fresh data: nothing of ours. */
+                a.gear = hud_live_gear(&live, t);
+                rpm = hud_live_rpm(&live, t);
+                scene = hud_live_gate(scene, (int)rpm, a.gear);
+                if (rpm < 0) {
+                    hud_anim_reset(&a);
+                    rpm = 0;
+                }
             }
             hud_anim_step(&a, rpm, t);
             pump(&s);
-            if (hud_sender_idle(&s)) {
+            if (hud_sender_ready(&s)) {
                 if (scene == HUD_SCENE_RPM) {
-                    hud_strip_key k = hud_strip_key_of(&o.prof, &o.geom, &a);
+                    hud_anim v = blink_view(&a, set.blink_rpm, blink_off);
+                    hud_strip_key k = hud_strip_key_of(&o.prof, &o.geom, &v);
                     if (!have_key || !hud_strip_key_equal(&k, &last_key)) {
                         hud_batch_init(&b);
-                        if (hud_strip_frame(&b, &o.prof, &o.pal, &o.geom, &o.hh, &a, &shown) > 0)
+                        if (hud_strip_frame(&b, &o.prof, &o.pal, &o.geom, &o.hh, &v, &shown) > 0) {
                             hud_sender_submit(&s, &b, t);
+                            blink_off = blink_next(&a, set.blink_rpm, blink_off);
+                            /* lag: from the revs' sample to this frame's last answer */
+                            if (o.mode == M_LIVE && a.have && !lag_wait) { lag_sample = last_sample; lag_done = s.st.done; lag_wait = 1; }
+                        }
                         last_key = k;
                         have_key = drawn = 1;
                     }
@@ -764,11 +831,17 @@ static int run_car(void)
                     drawn = have_key = 0;
                 }
             }
+            if (lag_wait && s.st.done > lag_done) {
+                lag_last = now_ms() - lag_sample;
+                if (lag_last > lag_max) lag_max = lag_last;
+                lag_wait = 0;
+            } else if (lag_wait && hud_sender_idle(&s)) lag_wait = 0;   /* that frame failed */
             if ((int32_t)(t - next_stats) >= 0) {
                 fprintf(stderr, "[hud] rpm %.0f gear %d: batches %u done %u replaced %u failed %u, calls %u answers %u "
-                        "errors %u timeouts %u strays %u, batch %u ms (max %u)\n",
+                        "errors %u timeouts %u strays %u, batch %u ms (max %u), lag %u ms (max %u), gear raw %d mode %s\n",
                         a.rpm, a.gear, s.st.batches, s.st.done, s.st.replaced, s.st.failed, s.st.calls, s.st.answers,
-                        s.st.errors, s.st.timeouts, s.st.strays, s.st.last_batch_ms, s.st.max_batch_ms);
+                        s.st.errors, s.st.timeouts, s.st.strays, s.st.last_batch_ms, s.st.max_batch_ms, lag_last, lag_max,
+                        live.gear_raw, mode_name(hud_live_mode(&live, t)));
                 next_stats = t + 2000;
             }
             if (hud_most_alive() != 0) { fprintf(stderr, "[hud] MOST link lost\n"); break; }

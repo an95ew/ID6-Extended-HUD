@@ -28,7 +28,7 @@ REQUIRED_BINS = {
     "hud-sportbar-qnx": (2,),       # ET_EXEC QNX worker
     "shift-deck-qnx": (2,),         # ET_EXEC QNX OBD collector
 }
-REQUIRED_CONFIG = ("ExtendedHUD.manifest", "ExtendedHUD.xml", "gateway-ip.txt")
+REQUIRED_CONFIG = ("ExtendedHUD.manifest", "ExtendedHUD.xml", "gateway-ip.txt", "cds.txt")   # cds.txt: the car data feed (run 6)
 EXECUTABLES = {"hud-sportbar-qnx", "shift-deck-qnx"}
 
 def check_arm_elf(path: Path, allowed_types):

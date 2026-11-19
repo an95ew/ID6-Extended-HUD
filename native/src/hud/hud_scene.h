@@ -16,7 +16,10 @@ typedef struct {
     int sport_bar;        /* menu: Sport Bar */
     int always;           /* menu: Always show Sport Bar; pauses Navigation without unticking it */
     int nav;              /* menu: Navigation */
-    int shift_rpm;        /* menu: Shift point */
+    int shift_rpm;        /* where the bar ends (7000, the redline); no menu row */
+    int blink_rpm;        /* menu: Shift point. The gear blinks from here (owner 2026-11-18: 6200..6600, default 6400) */
+    int in_flight;        /* HUD calls awaiting an answer, 1..32 (the factory's 3); tuned on the car, no menu row */
+    int merge_pts;        /* points per merged polygon, 0 = one per outline, -1 = the layout's; tuned on the car */
     hud_text_style text;  /* lang=uk|en|de|pl, text=native|latin, street_max=8..32 */
 } hud_settings;
 

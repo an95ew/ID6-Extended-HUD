@@ -4,6 +4,9 @@
 #include "hud/hud_scene.h"
 #include "hud/hud_sender.h"
 #include "hud/hud_app.h"
+#include "hud/hud_gear.h"
+#include "hud/hud_cds.h"
+#include "drive_frame.h"
 #include <stdlib.h>
 #include <sys/stat.h>
 #include <unistd.h>
@@ -366,11 +369,16 @@ static void test_scene(void) {
     assert(hud_settings_parse(&s, "shift_rpm=99999\n", 16) == 0 && s.shift_rpm == 6500);
     assert(hud_settings_parse(&s, "lang=en\ntext=latin\nstreet_max=24\ntext=nativ\nlang=xx\nstreet_max=99\nturns_in_sport=1\n", 83) == 3);
     assert(s.text.lang == HUD_LANG_EN && s.text.script == HUD_SCRIPT_LATIN && s.text.street_max == 24);
+    /* the latency knobs (car run 6 tunes them by hand): a window of 1..16, merging -1 (the layout's) .. 99 */
+    assert(s.in_flight == 32 && s.merge_pts == -1 && s.blink_rpm == 6400);
+    assert(hud_settings_parse(&s, "blink_rpm=6600\n", 15) == 1 && s.blink_rpm == 6600);
+    assert(hud_settings_parse(&s, "in_flight=8\nmerge_pts=0\nin_flight=33\nmerge_pts=100\n", 51) == 2);
+    assert(s.in_flight == 8 && s.merge_pts == 0);
     hud_settings_format(&s, text, sizeof text);
     {
         hud_settings r;
         memset(&r, 0, sizeof r);
-        assert(hud_settings_parse(&r, text, strlen(text)) == 7 && !memcmp(&r, &s, sizeof r));
+        assert(hud_settings_parse(&r, text, strlen(text)) == 10 && !memcmp(&r, &s, sizeof r));
     }
 }
 
@@ -398,6 +406,19 @@ static void test_sender(void) {
     hud_sender_init(&s, rec_send, NULL);
     hud_sender_submit(&s, &b, 0);
     assert(g_nsent == HUD_IN_FLIGHT);              /* the window */
+    {   /* a wider window (car run 6: --in-flight) sends more before the first answer; it is clamped */
+        hud_sender w;
+        unsigned before = g_nsent;
+        hud_sender_init(&w, rec_send, NULL);
+        hud_sender_set_window(&w, 8);
+        hud_sender_submit(&w, &b, 0);
+        assert(g_nsent - before == 8);
+        hud_sender_set_window(&w, 99);
+        assert(w.window == HUD_MAX_IN_FLIGHT);
+        hud_sender_set_window(&w, 0);
+        assert(w.window == 1);
+        g_nsent = before;
+    }
     answer(&s, 0, 5);
     assert(g_nsent == 4);
     hud_sender_answer(&s, HUD_FILL_COLOR, 0x6, g_sent[1].p, 2, 6);   /* an ack is not the answer */
@@ -454,6 +475,34 @@ static void test_sender(void) {
         assert(s.st.answers == 5);
         hud_sender_answer(&s, HUD_GET_SIZE, 0x9, g_sent[5].p, 2, 12);
         assert(s.st.answers == 6 && s.st.errors == 1);
+    }
+    /* Car run 6: pipelining. A frame all sent lets the next one start (into the other buffer) before its answers come;
+       never more than two overlap, and a timeout drops both. */
+    {
+        hud_batch a1, a2;
+        hud_batch_init(&a1);
+        hud_batch_init(&a2);
+        for (i = 0; i < 4; i++) { hud_fill_color(&a1, 31, (uint8_t)i); hud_fill_color(&a2, 32, (uint8_t)i); }
+        hud_sender_init(&s, rec_send, NULL);
+        hud_sender_set_window(&s, 32);
+        g_nsent = 0;
+        hud_sender_submit(&s, &a1, 0);
+        assert(g_nsent == 4 && !hud_sender_ready(&s));    /* not pipelining: wait for the answers */
+        hud_sender_set_pipeline(&s, 1);
+        assert(hud_sender_ready(&s));
+        hud_sender_submit(&s, &a2, 1);
+        assert(g_nsent == 8 && !hud_sender_ready(&s) && s.st.batches == 2);
+        hud_sender_submit(&s, &a1, 2);                    /* a third waits: no more than two overlap */
+        assert(g_nsent == 8);
+        for (i = 0; i < 4; i++) answer(&s, i, 250);
+        assert(s.st.done == 1 && s.st.last_batch_ms == 250 && g_nsent == 12);   /* a2 is the tail now, a1 goes out */
+        for (i = 4; i < 12; i++) answer(&s, i, 260);
+        assert(s.st.done == 3 && s.st.strays == 0 && hud_sender_idle(&s));
+        hud_sender_submit(&s, &a1, 300);
+        hud_sender_submit(&s, &a2, 301);
+        assert(s.nflight == 8);
+        hud_sender_tick(&s, 302 + HUD_ANSWER_TIMEOUT_MS);
+        assert(s.st.timeouts == 1 && s.st.failed == 2 && hud_sender_idle(&s) && s.nflight == 0);
     }
 }
 
@@ -702,8 +751,84 @@ static void test_gear(void) {
     assert(hud_gear_estimate(4000, 56.5) == 0);   /* between 2nd and 3rd, more than 12% from both */
     assert(hud_gear_estimate(800, 0) == 0);
     assert(hud_gear_estimate(6000, 5) == 0);   /* clutch slip, far from any ratio */
+
+    /* The car's own values (owner 2026-11-18: actual data only; the gear in D/S, nothing in P, R, N). */
+    assert(hud_gear_decode(DRIVE_SRC_OBD, 0x0006) == 0);      /* [car] P */
+    assert(hud_gear_decode(DRIVE_SRC_OBD, 0x0105) == 0);      /* not seen yet: nothing, not a guess */
+    assert(hud_gear_decode(DRIVE_SRC_CDS, 0x0106) == 0 && hud_gear_decode(DRIVE_SRC_OBD, -1) == 0);
+    assert(hud_mode_decode(DRIVE_SRC_CDS, 2) == HUD_MODE_UNKNOWN);
+    assert(hud_mode_decode(DRIVE_SRC_CDS, 3) == HUD_MODE_COMFORT && hud_mode_decode(DRIVE_SRC_CDS, 4) == HUD_MODE_SPORT &&
+           hud_mode_decode(DRIVE_SRC_CDS, 5) == HUD_MODE_SPORT_PLUS && hud_mode_decode(DRIVE_SRC_CDS, 7) == HUD_MODE_ECO_PRO);
+    assert(hud_mode_decode(DRIVE_SRC_OBD, 4) == HUD_MODE_UNKNOWN);   /* the source matters */
+    assert(hud_gear_decode(DRIVE_SRC_CDS, 3) == 0 && hud_gear_decode(DRIVE_SRC_CDS, 2) == 0 && hud_gear_decode(DRIVE_SRC_CDS, 1) == 0);
+    assert(hud_gear_decode(DRIVE_SRC_CDS, 5) == 1 && hud_gear_decode(DRIVE_SRC_CDS, 6) == 2 && hud_gear_decode(DRIVE_SRC_CDS, 12) == 8);
+    assert(hud_gear_decode(DRIVE_SRC_CDS, 13) == 0 && hud_gear_decode(DRIVE_SRC_CDS, 4) == 0);   /* never seen: hidden */
+    {
+        hud_live l;
+        struct drive_frame f = { 0, 850, -1, -1, -1, DRIVE_SRC_OBD, 0 };
+        hud_live_init(&l);
+        assert(hud_live_rpm(&l, 100) == -1 && hud_live_gear(&l, 100) == 0 && hud_live_mode(&l, 100) == HUD_MODE_UNKNOWN);
+        assert(hud_live_feed(&l, &f, 1000) == 0 && hud_live_rpm(&l, 1500) == 850);
+        f.rpm = -1;
+        f.gear_raw = 0x0006;                       /* a gear-only frame keeps the revs */
+        hud_live_feed(&l, &f, 1300);
+        assert(hud_live_rpm(&l, 1500) == 850 && l.gear_raw == 6 && hud_live_gear(&l, 1500) == 0);
+        assert(hud_live_rpm(&l, 1000 + HUD_DRIVE_STALE_MS) == -1);   /* old revs draw nothing */
+        f.gear_raw = -1;
+        f.mode_raw = 7;
+        f.source = DRIVE_SRC_CDS;
+        assert(hud_live_feed(&l, &f, 2000) == 1 && hud_live_feed(&l, &f, 2100) == 0);
+        assert(hud_live_mode(&l, 2100) == HUD_MODE_ECO_PRO);          /* [car] run 6 */
+        f.mode_raw = 6;
+        hud_live_feed(&l, &f, 2200);
+        assert(hud_live_mode(&l, 2200) == HUD_MODE_UNKNOWN);          /* unmapped: Comfort rules */
+        /* CDS revs win over the collector's while fresh; the collector takes over when CDS goes quiet. */
+        f.mode_raw = -1;
+        f.rpm = 3000;
+        hud_live_feed(&l, &f, 3000);
+        f.source = DRIVE_SRC_OBD;
+        f.rpm = 2800;
+        hud_live_feed(&l, &f, 3100);
+        assert(hud_live_rpm(&l, 3100) == 3000);
+        hud_live_feed(&l, &f, 3000 + HUD_DRIVE_STALE_MS);
+        assert(hud_live_rpm(&l, 3000 + HUD_DRIVE_STALE_MS) == 2800);
+    }
+    /* Owner 2026-11-18: the bar only with the engine running and the gearbox in D/S/M. */
+    assert(hud_live_gate(HUD_SCENE_RPM, 820, 1) == HUD_SCENE_RPM);   /* D, standing at idle: before a launch */
+    assert(hud_live_gate(HUD_SCENE_RPM, 0, 1) == HUD_SCENE_NONE);    /* engine off */
+    assert(hud_live_gate(HUD_SCENE_RPM, 820, 0) == HUD_SCENE_NONE);  /* P, N, R or a value not mapped yet */
+    assert(hud_live_gate(HUD_SCENE_RPM, -1, 3) == HUD_SCENE_NONE);   /* no fresh revs */
+    assert(hud_live_gate(HUD_SCENE_NAV, 0, 0) == HUD_SCENE_NAV);     /* the nav scene doesn't need the engine */
 }
 
+
+/* The plugin's CDS probe: cds.txt, the UTF-16 values, the frames it sends the worker. */
+static void test_cds(void) {
+    static const char cfg[] = "# car run 6\nengine.RPMSpeed rpm 50\r\ndriving.gear gear\n  driving.mode\n"
+                              "bad.kind wobble\nbad.interval log 99999\ndriving.speedActual kph 0\n\n";
+    static const uint16_t json[] = { '{', '"', 'R', 'P', 'M', 'S', 'p', 'e', 'e', 'd', '"', ':', '8', '5', '0', '}', 0 };
+    static const uint16_t none[] = { '{', '}', 0xe9, 0 };
+    hud_cds_prop p[HUD_CDS_MAX];
+    struct drive_frame f;
+    char text[HUD_CDS_TEXT];
+    long v;
+    int n = hud_cds_parse(cfg, sizeof cfg - 1, p, HUD_CDS_MAX);
+    assert(n == 4);
+    assert(!strcmp(p[0].name, "engine.RPMSpeed") && p[0].kind == HUD_CDS_RPM && p[0].interval == 50);
+    assert(!strcmp(p[1].name, "driving.gear") && p[1].kind == HUD_CDS_GEAR && p[1].interval == 100);
+    assert(!strcmp(p[2].name, "driving.mode") && p[2].kind == HUD_CDS_LOG);
+    assert(p[3].kind == HUD_CDS_KPH && p[3].interval == 0);
+    assert(hud_cds_parse(cfg, sizeof cfg - 1, p, 2) == 2);
+    assert(hud_cds_value(json, HUD_CDS_TEXT, text, sizeof text, &v) == 16 && v == 850 && !strcmp(text, "{\"RPMSpeed\":850}"));
+    assert(hud_cds_value(none, HUD_CDS_TEXT, text, sizeof text, &v) == 3 && v == -1 && !strcmp(text, "{}?"));
+    assert(hud_cds_value(json, 4, text, sizeof text, &v) == 4 && v == -1);   /* bounded */
+    assert(hud_cds_value(NULL, 8, text, sizeof text, &v) == 0 && v == -1 && !text[0]);
+    assert(!hud_cds_frame(HUD_CDS_LOG, 850, 5, &f) && !hud_cds_frame(HUD_CDS_RPM, -1, 5, &f));
+    assert(hud_cds_frame(HUD_CDS_RPM, 850, 5, &f) && f.rpm == 850 && f.kph == -1 && f.gear_raw == -1 && f.mode_raw == -1 &&
+           f.source == DRIVE_SRC_CDS && f.sampled_ms == 5);
+    assert(hud_cds_frame(HUD_CDS_MODE, 3, 5, &f) && f.mode_raw == 3 && f.rpm == -1);
+    assert(sizeof(struct drive_frame) == 32);
+}
 
 /* The installed app's logic: settings round trip, toggles, when the worker runs, its command line, conflicts. */
 static void test_app(void) {
@@ -729,21 +854,40 @@ static void test_app(void) {
     hud_app_status(&r, 0, NULL, 0, st, sizeof st);
     assert(!strcmp(st, "Off"));
     hud_app_status(&s, 1, NULL, 0, st, sizeof st);
-    assert(strstr(st, "tick Always"));
+    assert(strstr(st, "Sport and Sport+"));   /* run 6: the driving mode comes from CDS */
     hud_app_status(&s, 1, "HudTest", 0, st, sizeof st);
     assert(strstr(st, "HudTest"));
 
+    /* The Shift point page: five values, 6400 by default, the label shows the choice. */
+    {
+        hud_settings b;
+        char label[64];
+        hud_app_defaults(&b);
+        assert(b.blink_rpm == 6400);
+        hud_app_set_blink(&b, 0);
+        assert(b.blink_rpm == 6200);
+        hud_app_set_blink(&b, 4);
+        hud_app_set_blink(&b, 5);                               /* not a choice: unchanged */
+        hud_app_set_blink(&b, -1);
+        assert(b.blink_rpm == 6600);
+        hud_app_blink_label(&b, label, sizeof label);
+        assert(!strcmp(label, "Gear blinks from 6,600 RPM"));
+    }
     argc = hud_app_worker_argv(HUD_APP_DIR, "169.254.21.3", buf, sizeof buf, argv, HUD_APP_MAX_ARGS);
     assert(argc > 10 && argv[argc] == NULL);
     assert(!strcmp(argv[0], HUD_APP_DIR "/hud-sportbar-qnx"));
     for (i = 1; i < argc - 1; i++) {
-        if (!strcmp(argv[i], "--palette")) { assert(!strcmp(argv[i + 1], "3,3,3,3,3,3,4")); found |= 1; }
+        if (!strcmp(argv[i], "--palette")) { assert(!strcmp(argv[i + 1], "3,4,3,4,3,4,4")); found |= 1; }
+        if (!strcmp(argv[i], "--layout")) { assert(!strcmp(argv[i + 1], "split")); found |= 16; }
+        if (!strcmp(argv[i], "--backs")) assert(!strcmp(argv[i + 1], "fill"));   /* the dim track: always visible */
+        if (!strcmp(argv[i], "--pipeline")) found |= 32;                          /* car run 6 W5 */
+        assert(strcmp(argv[i], "--in-flight") && strcmp(argv[i], "--merge"));   /* settings.txt tunes these live */
         if (!strcmp(argv[i], "--collector")) { assert(!strcmp(argv[i + 1], HUD_APP_DIR "/shift-deck-qnx")); found |= 2; }
         if (!strcmp(argv[i], "--host")) { assert(!strcmp(argv[i + 1], "169.254.21.3")); found |= 4; }
         if (!strcmp(argv[i], "--most-inst")) { assert(!strcmp(argv[i + 1], "2")); found |= 8; }
-        assert(strcmp(argv[i], "--text-clear"));            /* the frozen run-4 look */
+        assert(strcmp(argv[i], "--text-clear"));
     }
-    assert(found == 15);
+    assert(found == 63);
     assert(hud_app_worker_argv(HUD_APP_DIR, "x", buf, 20, argv, HUD_APP_MAX_ARGS) == -1);
 
     assert(hud_app_conflict(dir) == NULL);
@@ -764,6 +908,54 @@ static int inside(const hud_point *pt, int n, int px, int py) {
         if ((pt[i].y > y) != (pt[j].y > y) &&
             x < pt[j].x + (double)(pt[i].x - pt[j].x) * (y - pt[j].y) / (pt[i].y - pt[j].y)) in = !in;
     return in;
+}
+
+/* The picture a batch leaves on a w x h canvas: each polygon paints its inside in the pen colour, later over earlier. */
+static void raster(const hud_batch *b, int w, int h, unsigned char *px) {
+    unsigned c;
+    int colour = 0, i, x, y;
+    memset(px, 0, (size_t)(w * h));
+    for (c = 0; c < b->n; c++) {
+        const hud_call *k = &b->call[c];
+        hud_point q[HUD_MAX_POINTS];
+        if (k->fkt == HUD_FILL_COLOR) colour = k->p[2];
+        if (k->fkt != HUD_POLYGON) continue;
+        for (i = 0; i < k->p[5]; i++) {
+            q[i].x = (int16_t)(k->p[6 + 4 * i] << 8 | k->p[7 + 4 * i]);
+            q[i].y = (int16_t)(k->p[8 + 4 * i] << 8 | k->p[9 + 4 * i]);
+        }
+        for (y = 0; y < h; y++)
+            for (x = 0; x < w; x++)
+                if (inside(q, k->p[5], x, y)) px[y * w + x] = (unsigned char)colour;
+    }
+}
+
+/* Car run 6 W1-W3 (IMG_9797..9799): the HUD draws a polygon's edges too, so a join along a bottom line that crosses
+   empty space shows as a thin line (it ran from the gear to the RPM). Returns 1 if a horizontal edge has a pixel
+   with nothing painted on either side of it, from row y_min down. */
+static int bare_join(const hud_batch *b, const unsigned char *px, int w, int h, int y_min) {
+    unsigned c;
+    int i, n, x, y, x0, x1;
+    for (c = 0; c < b->n; c++) {
+        const hud_call *k = &b->call[c];
+        if (k->fkt != HUD_POLYGON) continue;
+        n = k->p[5];
+        for (i = 0; i < n; i++) {
+            int j = (i + 1) % n;
+            int ya = k->p[8 + 4 * i] << 8 | k->p[9 + 4 * i], yb = k->p[8 + 4 * j] << 8 | k->p[9 + 4 * j];
+            int xa = k->p[6 + 4 * i] << 8 | k->p[7 + 4 * i], xb = k->p[6 + 4 * j] << 8 | k->p[7 + 4 * j];
+            if (ya != yb || ya < y_min) continue;
+            y = ya;
+            x0 = xa < xb ? xa : xb;
+            x1 = xa < xb ? xb : xa;
+            for (x = x0; x < x1 && x < w; x++)
+                if (!(y > 0 && y - 1 < h && px[(y - 1) * w + x]) && !(y < h && px[y * w + x])) {
+                    fprintf(stderr, "bare join: polygon %u, y %d, x %d..%d (at %d)\n", c, y, x0, x1, x);
+                    return 1;
+                }
+        }
+    }
+    return 0;
 }
 
 /* 2026-11-18 split layout: a dim track, the lit fields white, the gear on the left and the RPM on the right under it,
@@ -805,12 +997,39 @@ static void test_split(void) {
     hud_geom_split(&g, 120, 72);
     assert(g.gear_cx - g.gear_h * 6 / 11 / 2 == g.x && g.rpm_x1 == g.x + g.w && g.rpm_h < g.gear_h);
 
-    /* 3 in 4th at 4200: 2 pens, 12 fields (lit, partial, unlit), the gear and four digits, all in two colours. */
+    /* 4th at 4200, merged: 2 pens; the unlit fields and the lit ones are a polygon each, each digit its own (2026-11-18: a
+       call answers in ~260 ms, the owner wants the HUD as fresh as the factory speed). */
     steady(&a, 4224, 10000);
     a.gear = 4;
     hud_batch_init(&b);
     n = hud_strip_frame(&b, &p, &pal, &g, &h, &a, &shown);
-    assert(count(&b, HUD_FILL_COLOR) == 2 && count(&b, HUD_POLYGON) == 12 + 1 + 1 + 4);
+    assert(count(&b, HUD_FILL_COLOR) == 2 && count(&b, HUD_POLYGON) == 7 && n == 1 + 2 + 7 + 1);
+    /* ... and paints exactly what one polygon per outline paints, for every frame of the sweep below. */
+    {
+        static unsigned char one[120 * 72], merged[120 * 72];
+        hud_geom g1 = g;
+        hud_batch b1;
+        g1.merge_pts = 0;
+        for (gear = 0; gear <= 8; gear += 4)
+            for (rpm = 0; rpm <= 7600; rpm += 50) {
+                int s1 = 0, s2 = 0;
+                steady(&a, rpm, 10000);
+                a.gear = gear;
+                a.peak = rpm + 300;
+                hud_batch_init(&b1);
+                hud_batch_init(&b);
+                assert(hud_strip_frame(&b1, &p, &pal, &g1, &h, &a, &s1) > 0 && hud_strip_frame(&b, &p, &pal, &g, &h, &a, &s2) > 0);
+                raster(&b1, 120, 72, one);
+                raster(&b, 120, 72, merged);
+                assert(!memcmp(one, merged, sizeof one));
+                assert(!bare_join(&b, one, 120, 72, g.y + g.h + 1));   /* the digits' row; the bar's joins sit on its base */
+                assert(count(&b, HUD_POLYGON) <= 8);
+            }
+        steady(&a, 4224, 10000);
+        a.gear = 4;
+        hud_batch_init(&b);
+        n = hud_strip_frame(&b, &p, &pal, &g, &h, &a, &shown);
+    }
     check_polygons(&b, &g);
     /* The gear's left edge is the strip's, the last digit ends on its right edge. */
     {
@@ -832,7 +1051,7 @@ static void test_split(void) {
             a.peak = rpm + 300;
             hud_batch_init(&b);
             n = hud_strip_frame(&b, &p, &pal, &g, &h, &a, &shown);
-            assert(n > 0 && n <= 26);
+            assert(n > 0 && n <= 12);   /* car run 6: a polygon per digit, so one round needs a window of 12+ */
             check_polygons(&b, &g);
             if (n > worst) worst = n;
         }
@@ -859,6 +1078,7 @@ int main(void) {
     test_text();
     test_nav();
     test_gear();
+    test_cds();
     test_split();
     puts("hud tests passed");
     return 0;

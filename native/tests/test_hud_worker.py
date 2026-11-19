@@ -23,6 +23,23 @@ def frames(*args):
     return lines[0], lines[1:], r.stderr
 
 
+def check_gear_blink():
+    # Owner 2026-11-18: past the Shift point (default 6400) only the gear blinks, one flip per frame; under it, it stays.
+    _, fs, err = frames("--seconds", "6", "--rtt", "260", "--in-flight", "16", "--layout", "split", "--canvas", "120x72", "--handles", "31,32",
+                        "--palette", "3,4,3,4,3,4,4", "--backs", "fill", "--flash-ms", "0", "--shift-colour", "4")
+    assert "0 timeouts" in err
+    over = [f for f in fs if f["rpm"] >= 6400]
+    under = [f for f in fs if 1500 < f["rpm"] < 6300]
+    assert len(over) >= 4 and under
+    assert all(f["gear"] for f in under), [f["gear"] for f in under]
+    shown = [bool(f["gear"]) for f in over]
+    assert True in shown and False in shown, shown
+    runs = [f for f in fs]
+    for a, b in zip(runs, runs[1:]):              # two frames in a row past the point never show the same phase
+        if a["rpm"] >= 6400 and b["rpm"] >= 6400 and a["t"] + 2000 > b["t"]:
+            assert bool(a["gear"]) != bool(b["gear"]), (a["t"], b["t"])
+
+
 def check_dump():
     head, fs, err = frames("--seconds", "10", "--rtt", "10")
     assert head["handles"] == [5, 6] and head["canvas"] == [480, 180]
@@ -131,6 +148,7 @@ def check_car_modes_without_dsi():
 
 
 if __name__ == "__main__":
+    check_gear_blink()
     check_dump()
     check_nav()
     check_story()

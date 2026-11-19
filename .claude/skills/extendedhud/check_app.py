@@ -65,7 +65,8 @@ def main():
     const = {k: int(v) for k, v in re.findall(r'\b(k\w+) = (\d+)u', cpp)}
     want = {'kSportBarAction': ('a', 'raAction'), 'kAlwaysAction': ('a', 'raAction'), 'kNavAction': ('a', 'raAction'),
             'kSportBarModel': ('m', 'raBoolModel'), 'kAlwaysModel': ('m', 'raBoolModel'), 'kNavModel': ('m', 'raBoolModel'),
-            'kStatusModel': ('m', 'raDataModel'), 'kAlwaysComponent': ('c', 'checkbox')}
+            'kStatusModel': ('m', 'raDataModel'), 'kAlwaysComponent': ('c', 'checkbox'),
+            'kBlinkModel': ('m', 'raDataModel'), 'kBlinkAction': ('a', 'raAction')}
     for name, (kind, tag) in want.items():
         if name not in const:
             problems.append('extended_hud.cpp: %s missing' % name)
@@ -77,6 +78,15 @@ def main():
     always = comps.get(const.get('kAlwaysComponent', -1))
     if always is not None and int(always.get('action')) != const.get('kAlwaysAction'):
         problems.append('kAlwaysComponent is not the checkbox of kAlwaysAction')
+    # The Shift point page: five raActions from kBlinkAction, one button each, in menu order (hud_app_blink_rpm).
+    for i in range(5):
+        a = const.get('kBlinkAction', -100) + i
+        if a not in actions or actions[a].tag != 'raAction':
+            problems.append('Shift point: action %d is not an raAction' % a)
+        elif not any(c.tag == 'button' and c.get('action') == str(a) for c in comps.values()):
+            problems.append('Shift point: no button sends action %d' % a)
+        if 'blink<%d>' % i not in cpp:
+            problems.append('extended_hud.cpp: no handler blink<%d>' % i)
     if 'pluginAppInfo' not in cpp or '"ExtendedHUD"' not in cpp:
         problems.append('extended_hud.cpp: pluginAppInfo must name "ExtendedHUD"')
 

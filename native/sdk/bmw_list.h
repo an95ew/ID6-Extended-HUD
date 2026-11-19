@@ -37,6 +37,8 @@ public:
     BasicString(const BasicString& o);           // _ZN3bmw11BasicStringIcEC1ERKS1_
     ~BasicString();                              // _ZN3bmw11BasicStringIcED1Ev
     BasicString& operator=(const BasicString&);  // _ZN3bmw11BasicStringIcEaSERKS1_
+    // ExtendedHUD CDS probe: the characters, 0-terminated (the COW buffer the pointer above holds). Read only.
+    const T* data() const { return m_data; }
 };
 
 // --- 4-byte POD passed by value
@@ -209,6 +211,18 @@ public:
     // Return value, if any, unknown; unused.
     void triggerEvent(unsigned int event);                                // _ZN3bmw9PluginApp12triggerEventEj 0x5444
     void triggerEvent(unsigned int event, const Parcel& value);           // _ZN3bmw9PluginApp12triggerEventEjRKNS_6ParcelE 0x5464
+    // CDS, the car data service (ExtendedHUD 2026-11-18). Names from libAppFramework X20511I's exports; the return types
+    // are not in the mangling, so nothing reads them except cdsIsPropertyAvailable's, which is only logged. The
+    // unsigned argument's meaning is a guess (an update interval). Untested on the car: car run 6, step C1.
+    //   _ZN3bmw9PluginApp22cdsIsPropertyAvailableERNS_11BasicStringIcEE
+    //   _ZN3bmw9PluginApp33cdsAddPropertyChangedEventHandlerERNS_11BasicStringIcEEjRKNS_8DelegateIbRKNS1_ItEEvvvEE
+    //   _ZN3bmw9PluginApp36cdsRemovePropertyChangedEventHandlerERNS_11BasicStringIcEE
+    //   _ZN3bmw9PluginApp19cdsGetPropertyAsyncERNS_11BasicStringIcEERKNS_8DelegateIbRKNS1_ItEEvvvEE
+    bool cdsIsPropertyAvailable(BasicString<char>& name);
+    void cdsAddPropertyChangedEventHandler(BasicString<char>& name, unsigned int interval,
+                                           const Delegate<bool, const BasicString<unsigned short>&>& d);
+    void cdsRemovePropertyChangedEventHandler(BasicString<char>& name);
+    void cdsGetPropertyAsync(BasicString<char>& name, const Delegate<bool, const BasicString<unsigned short>&>& d);
 
     // --- 34 primary virtuals in EXACT slot order (only params/const matter for the ABI) ---
     virtual ~PluginApp();                                                  // 0,1

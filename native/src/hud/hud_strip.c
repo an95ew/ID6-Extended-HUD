@@ -51,7 +51,7 @@ void hud_geom_default(hud_geom *g)
     g->nav_x0 = 0;
     g->nav_text_top = 0;
     g->rise = 0;
-    g->rpm_x1 = g->rpm_h = g->solid_digits = 0;
+    g->rpm_x1 = g->rpm_h = g->solid_digits = g->merge_pts = 0;
 }
 
 void hud_geom_for_canvas(hud_geom *g, int canvas_w, int canvas_h)
@@ -75,7 +75,7 @@ void hud_geom_for_canvas(hud_geom *g, int canvas_w, int canvas_h)
     g->nav_x0 = 0;
     g->nav_text_top = 0;
     g->rise = 0;
-    g->rpm_x1 = g->rpm_h = g->solid_digits = 0;
+    g->rpm_x1 = g->rpm_h = g->solid_digits = g->merge_pts = 0;
 }
 
 void hud_geom_big(hud_geom *g, int canvas_w, int canvas_h)
@@ -93,7 +93,7 @@ void hud_geom_big(hud_geom *g, int canvas_w, int canvas_h)
     g->gear_h = canvas_h - g->gear_top - 2;
     g->nav_x0 = 240;   /* the nav design lives in x 244..470 */
     g->rise = g->h / 4;
-    g->rpm_x1 = g->rpm_h = g->solid_digits = 0;
+    g->rpm_x1 = g->rpm_h = g->solid_digits = g->merge_pts = 0;
 }
 
 void hud_geom_split(hud_geom *g, int canvas_w, int canvas_h)
@@ -103,6 +103,7 @@ void hud_geom_split(hud_geom *g, int canvas_w, int canvas_h)
     g->rpm_x1 = g->x + g->w;
     g->rpm_h = g->gear_h * 4 / 5;                 /* a step smaller: the gear leads */
     g->solid_digits = 1;
+    g->merge_pts = HUD_MAX_POINTS;
 }
 
 void hud_handles_default(hud_handles *h)
@@ -284,29 +285,76 @@ int hud_digit_poly(int d, int x, int y, int w, int h, int t, hud_point *pt)
     return n;
 }
 
+/* Outlines out to one image, one polygon each or merged. Merged: outlines that share a bottom line chain into one
+   polygon, each entered and left at its bottom-left corner and joined along that line. A horizontal edge is crossed by
+   no scanline (the keyhole digits rely on the same), so the joins draw nothing and the fill is the outlines'. */
+typedef struct {
+    hud_batch *b;
+    uint16_t h, id;
+    int cur;                          /* pen colour, -1 unknown; pen state is per image */
+    unsigned max;                     /* merge_pts, 0 = no merging */
+    hud_point pt[HUD_MAX_POINTS];
+    unsigned n;
+    int base;
+} emitter;
+
+static void emit_init(emitter *e, hud_batch *b, uint16_t h, int merge_pts)
+{
+    e->b = b;
+    e->h = h;
+    e->id = 1;
+    e->cur = -1;
+    e->max = merge_pts > 0 ? (unsigned)(merge_pts > HUD_MAX_POINTS ? HUD_MAX_POINTS : merge_pts) : 0;
+    e->n = 0;
+}
+
+static int emit_flush(emitter *e)
+{
+    int r = 0;
+    if (e->n) r = hud_polygon(e->b, e->h, e->id++, e->pt, e->n);
+    e->n = 0;
+    return r;
+}
+
+/* The colour only when it changes; whatever waits goes out in the old one first. */
+static int emit_pen(emitter *e, uint8_t c)
+{
+    if (e->cur == c) return 0;
+    if (emit_flush(e)) return -1;
+    e->cur = c;
+    return hud_fill_color(e->b, e->h, c);
+}
+
+static int emit_outline(emitter *e, const hud_point *p, unsigned n)
+{
+    unsigned s = 0, i, need;
+    if (!e->max) return hud_polygon(e->b, e->h, e->id++, p, n);
+    for (i = 1; i < n; i++)
+        if (p[i].y > p[s].y || (p[i].y == p[s].y && p[i].x < p[s].x)) s = i;
+    need = n + (p[(s + n - 1) % n].y != p[s].y);   /* back to the bottom line unless it ends there */
+    if (e->n && (p[s].y != e->base || e->n + need > e->max) && emit_flush(e)) return -1;
+    if (need > e->max) return hud_polygon(e->b, e->h, e->id++, p, n);
+    for (i = 0; i < n; i++) e->pt[e->n++] = p[(s + i) % n];
+    if (need > n) e->pt[e->n++] = p[s];
+    e->base = p[s].y;
+    return 0;
+}
+
 static int digit_w(int h) { return h * 6 / 11; }
 static int digit_t(int h) { return h / 7 < 2 ? 2 : h / 7; }
 
-/* Pen state is per image, so set the colour only when it changes. */
-static int pen(hud_batch *b, uint16_t h, int *cur, uint8_t c)
+static int draw_backs(emitter *e, const hud_palette *pal, const hud_geom *g, const hud_strip_key *k, int all)
 {
-    if (*cur == c) return 0;
-    *cur = c;
-    return hud_fill_color(b, h, c);
-}
-
-static int draw_backs(hud_batch *b, uint16_t h, const hud_palette *pal, const hud_geom *g,
-                      const hud_strip_key *k, int all, uint16_t *id)
-{
-    int i, zone, cur = -1, outline = pal->backs == HUD_BACKS_OUTLINE;
+    int i, zone, outline = pal->backs == HUD_BACKS_OUTLINE;
     hud_point pt[4];
     if (pal->backs == HUD_BACKS_NONE) return 0;
-    if (outline && (hud_line_width(b, h, 1) || hud_line_color(b, h, pal->base_off) || pen(b, h, &cur, 0))) return -1;
+    if (outline && (hud_line_width(e->b, e->h, 1) || hud_line_color(e->b, e->h, pal->base_off) || emit_pen(e, 0)))
+        return -1;
     for (zone = 0; zone < 3; zone++)
         for (i = 0; i < HUD_FIELDS; i++) {
             if (hud_field_zone(i) != zone || (!all && i < k->full)) continue;
             field_poly(g, i, 1.0, pt);
-            if ((!outline && pen(b, h, &cur, color_of(pal, zone, 0))) || hud_polygon(b, h, (*id)++, pt, 4)) return -1;
+            if ((!outline && emit_pen(e, color_of(pal, zone, 0))) || emit_outline(e, pt, 4)) return -1;
         }
     return 0;
 }
@@ -316,32 +364,33 @@ int hud_strip_frame(hud_batch *b, const hud_profile *p, const hud_palette *pal, 
 {
     hud_strip_key k = hud_strip_key_of(p, g, a);
     unsigned start = b->n;
-    uint16_t h = hh->buf[1 - *shown], id = 1;
-    int i, zone, cur = -1, lit = k.flash_on ? k.full : 0;
+    uint16_t h = hh->buf[1 - *shown];
+    int i, zone, lit = k.flash_on ? k.full : 0;
     hud_point pt[4];
     double fw = field_width(g);
+    emitter e;
 
+    emit_init(&e, b, h, g->merge_pts);
     if (hud_remove_all(b, h)) goto full;
     if (!hh->static_backs) {
         hud_strip_key back = k;
         back.full = lit;
-        if (draw_backs(b, h, pal, g, &back, 0, &id)) goto full;
+        if (draw_backs(&e, pal, g, &back, 0)) goto full;
     }
     for (zone = 0; zone < 3; zone++)
         for (i = 0; i < lit; i++) {
             if (hud_field_zone(i) != zone) continue;
             field_poly(g, i, 1.0, pt);
-            if (pen(b, h, &cur, k.shifting && pal->shift_on ? pal->shift_on : color_of(pal, zone, 1)) ||
-                hud_polygon(b, h, id++, pt, 4)) goto full;
+            if (emit_pen(&e, k.shifting && pal->shift_on ? pal->shift_on : color_of(pal, zone, 1)) ||
+                emit_outline(&e, pt, 4)) goto full;
         }
     if (!k.shifting && k.partial_px > 0 && lit < HUD_FIELDS) {
         field_poly(g, lit, k.partial_px / fw, pt);
-        if (pen(b, h, &cur, color_of(pal, hud_field_zone(lit), 1)) || hud_polygon(b, h, id++, pt, 4)) goto full;
+        if (emit_pen(&e, color_of(pal, hud_field_zone(lit), 1)) || emit_outline(&e, pt, 4)) goto full;
     }
     if (k.peak_field >= 0) {
         peak_poly(g, k.peak_field, pt);
-        if (pen(b, h, &cur, color_of(pal, hud_field_zone(k.peak_field), 1)) || hud_polygon(b, h, id++, pt, 4))
-            goto full;
+        if (emit_pen(&e, color_of(pal, hud_field_zone(k.peak_field), 1)) || emit_outline(&e, pt, 4)) goto full;
     }
     if (k.gear >= 1 && k.gear <= 9 && g->gear_h > 0) {
         uint8_t ink = !k.shifting ? pal->ink : pal->shift_on ? pal->shift_on : k.flash_on ? pal->red_on : pal->red_off;
@@ -349,27 +398,28 @@ int hud_strip_frame(hud_batch *b, const hud_profile *p, const hud_palette *pal, 
             hud_point dp[HUD_DIGIT_PTS];
             int dw = digit_w(g->gear_h);
             int np = hud_digit_poly(k.gear, g->gear_cx - dw / 2, g->gear_top, dw, g->gear_h, digit_t(g->gear_h), dp);
-            if (pen(b, h, &cur, ink) || hud_polygon(b, h, id++, dp, (unsigned)np)) goto full;
+            if (emit_pen(&e, ink) || emit_outline(&e, dp, (unsigned)np)) goto full;
         } else
             for (i = 0; i < 7; i++) {
                 if (!(k_seg[k.gear] >> i & 1)) continue;
                 seg_poly(g, i, pt);
-                if (pen(b, h, &cur, ink) || hud_polygon(b, h, id++, pt, 4)) goto full;
+                if (emit_pen(&e, ink) || emit_outline(&e, pt, 4)) goto full;
             }
     }
     if (k.rpm >= 0) {
-        /* Right-aligned, bottom on the gear's, in the ink: the number is read, not the colour. */
+        /* Right-aligned, bottom on the gear's, in the ink: the number is read, not the colour. A polygon per digit:
+           the HUD draws edges, and joins across the gaps (gear to RPM, between digits) showed as a line (car run 6). */
         hud_point dp[HUD_DIGIT_PTS];
         int dh = g->rpm_h, dw = digit_w(dh), gap = dh / 8 < 2 ? 2 : dh / 8, top = g->gear_top + g->gear_h - dh;
         int x = g->rpm_x1 - dw, v = k.rpm;
         do {
             int np = hud_digit_poly(v % 10, x, top, dw, dh, digit_t(dh), dp);
-            if (pen(b, h, &cur, pal->ink) || hud_polygon(b, h, id++, dp, (unsigned)np)) goto full;
+            if (emit_pen(&e, pal->ink) || emit_flush(&e) || emit_outline(&e, dp, (unsigned)np)) goto full;
             x -= dw + gap;
             v /= 10;
         } while (v > 0);
     }
-    if (hud_switch_visibility(b, hh->buf[*shown], h)) goto full;
+    if (emit_flush(&e) || hud_switch_visibility(b, hh->buf[*shown], h)) goto full;
     *shown = 1 - *shown;
     return (int)(b->n - start);
 full:
@@ -381,11 +431,12 @@ int hud_strip_static(hud_batch *b, const hud_profile *p, const hud_palette *pal,
                      const hud_handles *h)
 {
     unsigned start = b->n;
-    uint16_t id = 1;
     hud_strip_key k;
+    emitter e;
     (void)p;
     memset(&k, 0, sizeof k);
-    if (hud_remove_all(b, h->static_h) || draw_backs(b, h->static_h, pal, g, &k, 1, &id)) {
+    emit_init(&e, b, h->static_h, g->merge_pts);
+    if (hud_remove_all(b, h->static_h) || draw_backs(&e, pal, g, &k, 1) || emit_flush(&e)) {
         b->n = start;
         return -1;
     }

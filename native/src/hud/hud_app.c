@@ -53,6 +53,18 @@ void hud_app_toggle(hud_settings *s, hud_app_item item)
     }
 }
 
+const int hud_app_blink_rpm[HUD_APP_BLINK_CHOICES] = { 6200, 6300, 6400, 6500, 6600 };
+
+void hud_app_set_blink(hud_settings *s, int i)
+{
+    if (i >= 0 && i < HUD_APP_BLINK_CHOICES) s->blink_rpm = hud_app_blink_rpm[i];
+}
+
+void hud_app_blink_label(const hud_settings *s, char *out, size_t cap)
+{
+    snprintf(out, cap, "Gear blinks from %d,%03d RPM", s->blink_rpm / 1000, s->blink_rpm % 1000);
+}
+
 int hud_app_wants_worker(const hud_settings *s) { return s->sport_bar || s->nav; }
 
 const char *hud_app_conflict(const char *plugins_dir)
@@ -70,12 +82,15 @@ const char *hud_app_conflict(const char *plugins_dir)
 
 int hud_app_worker_argv(const char *dir, const char *gateway, char *buf, size_t cap, const char **argv, int max)
 {
-    /* Car run 4: T2 (brightness cue: grey 3 through the revs, all white 4 at the shift, no backs) and T3 (nav, texts on the
-       6WB areas 0x1A/0x1B). Owner: "this design was well for me"; run 5 confirmed it, frozen. */
+    /* The split Sport Bar (owner, 2026-11-18): the whole track dim (3), the lit part white (4) like the factory speed,
+       the gear left (the gearbox's, D/S only) and the RPM right, merged into ~7 calls a frame. The latency knobs
+       (in_flight, merge_pts) come from settings.txt, so car runs tune them without a new build. */
     static const char *const k_fixed[] = {
-        "--draw-live", "--layout", "big", "--flash-ms", "0", "--palette", "3,3,3,3,3,3,4", "--shift-colour", "4",
-        "--backs", "none", "--most-inst", "2", "--handles", "31,32", "--canvas", "120x72", "--container", "23",
+        "--draw-live", "--layout", "split", "--flash-ms", "0", "--palette", "3,4,3,4,3,4,4", "--shift-colour", "4",
+        "--backs", "fill", "--most-inst", "2", "--handles", "31,32", "--canvas", "120x72", "--container", "23",
         "--text-handles", "26,27", "--text-visible", "--udp-port", "42873",
+        /* car run 6 W5: frames overlap (the next starts once the last is all sent), 6.2 frames/s against 3.4 */
+        "--pipeline",
     };
     const char *paths[3];
     size_t used = 0, i;
@@ -107,6 +122,6 @@ void hud_app_status(const hud_settings *s, int running, const char *conflict, in
     if (conflict) snprintf(out, cap, "Off: remove %s first (two HUD apps freeze the HUD)", conflict);
     else if (!hud_app_wants_worker(s)) snprintf(out, cap, "Off");
     else if (!running) snprintf(out, cap, restarts ? "Stopped, retrying (%d)" : "Starting", restarts);
-    else if (s->sport_bar && !s->always) snprintf(out, cap, "Running. Driving mode not available yet: tick Always");
+    else if (s->sport_bar && !s->always) snprintf(out, cap, "Running: bar in Sport and Sport+");
     else snprintf(out, cap, "Running");
 }

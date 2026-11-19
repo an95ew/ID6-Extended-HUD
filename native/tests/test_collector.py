@@ -41,12 +41,13 @@ class CollectorTest(unittest.TestCase):
                     conn, _ = listener.accept()
                     with conn:
                         conn.settimeout(3)
-                        for request, responses in transactions:
+                        for request, responses, *ecu in transactions:
+                            ecu = ecu[0] if ecu else "12"
                             size, control = struct.unpack(">IH", exact(conn, 6))
                             self.assertEqual(control, 1)
-                            self.assertEqual(exact(conn, size), bytes.fromhex("f412" + request))
+                            self.assertEqual(exact(conn, size), bytes.fromhex("f4" + ecu + request))
                             for response in responses:
-                                conn.sendall(hsfz_frame(1, bytes.fromhex("12f4" + response)))
+                                conn.sendall(hsfz_frame(1, bytes.fromhex(ecu + "f4" + response)))
                         self.assertEqual(conn.recv(1), b"", "Unexpected repeat or extra command")
                 except Exception as error:
                     errors.append(error)
@@ -80,9 +81,43 @@ class CollectorTest(unittest.TestCase):
             listener.settimeout(2)
             self.run_worker(["--cycles", "1", "--udp-port", str(listener.getsockname()[1])],
                             [("010c", ["410c61a8"]), ("010d", ["410d64"])])
-            sampled_ms, rpm, kph = struct.unpack("=Qii", listener.recv(64))
+            sampled_ms, rpm, kph = struct.unpack("=Qiiiiii", listener.recv(64))[:3]
             self.assertGreater(sampled_ms, 0)
             self.assertEqual((rpm, kph), (6250, 100))
+
+    def frames(self, listener, n):
+        return [struct.unpack("=Qiiiiii", listener.recv(64)) for _ in range(n)]
+
+    def test_gear_from_the_gearbox_in_turns_with_the_revs(self):
+        # ExtendedHUD 2026-11-18: no speed, the gearbox (EGS 0x18, 22 DA 2E) every second request; each frame carries
+        # only what it read (-1 for the rest), and every new gearbox reply is logged in full.
+        with socket.socket(socket.AF_INET, socket.SOCK_DGRAM) as listener:
+            listener.bind(("127.0.0.1", 0))
+            listener.settimeout(2)
+            err = self.run_worker(["--cycles", "4", "--gear", "--no-speed", "--udp-port", str(listener.getsockname()[1])],
+                                  [("010c", ["410c0d48"]), ("22da2e", ["62da2e0006"], "18"),
+                                   ("010c", ["410c1a90"]), ("22da2e", ["62da2e0006"], "18")], stream="stderr")
+            got = [f[1:6] for f in self.frames(listener, 4)]
+        self.assertEqual(got, [(850, -1, -1, -1, 0), (-1, -1, 0x0006, -1, 0), (1700, -1, -1, -1, 0), (-1, -1, 0x0006, -1, 0)])
+        self.assertEqual(err.count("[collector] EGS 22 DA 2E -> 62 da 2e 00 06"), 1)
+
+    def test_rpm_and_speed_in_one_request(self):
+        with socket.socket(socket.AF_INET, socket.SOCK_DGRAM) as listener:
+            listener.bind(("127.0.0.1", 0))
+            listener.settimeout(2)
+            self.run_worker(["--cycles", "1", "--multi-pid", "--udp-port", str(listener.getsockname()[1])],
+                            [("010c0d", ["410c61a80d64"])])
+            self.assertEqual(self.frames(listener, 1)[0][1:3], (6250, 100))
+
+    def test_one_pid_dme_falls_back_to_two_requests(self):
+        with socket.socket(socket.AF_INET, socket.SOCK_DGRAM) as listener:
+            listener.bind(("127.0.0.1", 0))
+            listener.settimeout(2)
+            err = self.run_worker(["--cycles", "2", "--multi-pid", "--udp-port", str(listener.getsockname()[1])],
+                                  [("010c0d", ["410c61a8"]), ("010d", ["410d64"]), ("010c", ["410c61a8"]), ("010d", ["410d65"])],
+                                  stream="stderr")
+            self.assertEqual([f[1:3] for f in self.frames(listener, 2)], [(6250, 100), (6250, 101)])
+        self.assertIn("reading 01 0D alone", err)
 
     def test_waits_for_busy_gateway(self):
         with socket.socket() as gateway, socket.socket(socket.AF_INET, socket.SOCK_DGRAM) as lock:
@@ -119,7 +154,7 @@ class CollectorTest(unittest.TestCase):
                 [BUILD / "shift-deck", "--host", "127.0.0.1", "--port", str(self.closed_port()),
                  "--udp-port", str(udp.getsockname()[1]), "--cycles", "40"],
                 capture_output=True, text=True, timeout=20, env=self.most_env())
-            _, rpm, kph = struct.unpack("=Qii", udp.recv(64))
+            _, rpm, kph = struct.unpack("=Qiiiiii", udp.recv(64))[:3]
         self.assertEqual(r.returncode, 0, r.stderr)
         self.assertEqual((rpm, kph), ((0x1A * 256 + 0xF8) // 4, 60))
         self.assertIn("transport: MOST", r.stderr)
@@ -142,7 +177,7 @@ class CollectorTest(unittest.TestCase):
                 stdout=subprocess.DEVNULL, stderr=subprocess.PIPE, text=True,
                 env=self.most_env(SHIFTDECK_TRACE="1"))
             try:
-                _, rpm, kph = struct.unpack("=Qii", udp.recv(64))
+                _, rpm, kph = struct.unpack("=Qiiiiii", udp.recv(64))[:3]
                 self.assertEqual((rpm, kph), ((0x1A * 256 + 0xF8) // 4, 60))
             finally:
                 proc.send_signal(signal.SIGTERM)
