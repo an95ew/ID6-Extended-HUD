@@ -6,7 +6,7 @@
 
 void hud_profile_b58(hud_profile *p)
 {
-    p->lo = 1000;
+    p->lo = 0;   /* owner 2026-11-19: the bar fills from 0, so idle already lights part of the first field */
     p->redline = 7000;
     p->flash_ms = 125;
     hud_profile_for_shift(p, 7000);
@@ -206,19 +206,22 @@ hud_strip_key hud_strip_key_of(const hud_profile *p, const hud_geom *g, const hu
 
 int hud_strip_key_equal(const hud_strip_key *a, const hud_strip_key *b) { return !memcmp(a, b, sizeof *a); }
 
-/* Field i as a parallelogram, the first t of its width. */
+/* Field i as a parallelogram, from t0 to t1 of its width. */
 static int field_top(const hud_geom *g, int i) { return g->y - g->rise * hud_field_zone(i) / 2; }
 
-static void field_poly(const hud_geom *g, int i, double t, hud_point pt[4])
+static void field_part(const hud_geom *g, int i, double t0, double t1, hud_point pt[4])
 {
     double fw = field_width(g), x0 = g->x + i * (fw + g->gap);
     int top = field_top(g, i), bot = g->y + g->h;
     double sl = g->h ? (double)g->slant * (bot - top) / g->h : g->slant;   /* same lean when taller */
-    pt[0].x = (int16_t)lround(x0 + sl);          pt[0].y = (int16_t)top;
-    pt[1].x = (int16_t)lround(x0 + sl + fw * t); pt[1].y = (int16_t)top;
-    pt[2].x = (int16_t)lround(x0 + fw * t);            pt[2].y = (int16_t)bot;
-    pt[3].x = (int16_t)lround(x0);                     pt[3].y = (int16_t)bot;
+    pt[0].x = (int16_t)lround(x0 + sl + fw * t0); pt[0].y = (int16_t)top;
+    pt[1].x = (int16_t)lround(x0 + sl + fw * t1); pt[1].y = (int16_t)top;
+    pt[2].x = (int16_t)lround(x0 + fw * t1);      pt[2].y = (int16_t)bot;
+    pt[3].x = (int16_t)lround(x0 + fw * t0);      pt[3].y = (int16_t)bot;
 }
+
+/* The first t of field i. */
+static void field_poly(const hud_geom *g, int i, double t, hud_point pt[4]) { field_part(g, i, 0, t, pt); }
 
 static void peak_poly(const hud_geom *g, int i, hud_point pt[4])
 {
@@ -358,7 +361,11 @@ static int draw_backs(emitter *e, const hud_palette *pal, const hud_geom *g, con
     for (zone = 0; zone < 3; zone++)
         for (i = 0; i < HUD_FIELDS; i++) {
             if (hud_field_zone(i) != zone || (!all && i < k->full)) continue;
-            field_poly(g, i, 1.0, pt);
+            /* car run 7 (2026-11-19): a lit part painted over its back did not show, so the partly lit field's back
+               covers only the unlit rest; no two polygons overlap */
+            if (!all && i == k->full && !k->shifting && k->partial_px > 0)
+                field_part(g, i, k->partial_px / field_width(g), 1.0, pt);
+            else field_poly(g, i, 1.0, pt);
             if ((!outline && emit_pen(e, color_of(pal, zone, 0))) || emit_outline(e, pt, 4)) return -1;
         }
     return 0;

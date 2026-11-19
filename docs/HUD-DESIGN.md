@@ -43,7 +43,7 @@ polygon, then the switch. Keep a frame near 12 calls. Whole concave polygons fil
 
 ## The Sport Bar
 
-**Zones (owner, 2026-11-18):** six low fields 1000–5000, three taller 5000–6000, three tallest 6000–7000. The bar ends
+**Zones (owner, 2026-11-18):** six low fields 0–5000 (from 0 since 2026-11-19, so idle lights part of the first), three taller 5000–6000, three tallest 6000–7000. The bar ends
 at the B58 redline and soft limiter, 7000 (fuel cut 7200). The end is the menu's shift setting (default 7000); the
 zones sit 2000 and 1000 below it. The RPM readout follows the engine past the end.
 

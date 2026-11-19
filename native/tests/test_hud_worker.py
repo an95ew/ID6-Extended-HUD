@@ -40,6 +40,18 @@ def check_gear_blink():
             assert bool(a["gear"]) != bool(b["gear"]), (a["t"], b["t"])
 
 
+def check_blink_rate():
+    # Owner 2026-11-19: faster frames must not blink faster. At a 10 ms round trip each phase still stays >= 160 ms.
+    _, fs, err = frames("--seconds", "6", "--rtt", "10", "--in-flight", "32", "--pipeline", "--layout", "split", "--canvas", "120x72",
+                        "--handles", "31,32", "--palette", "3,4,3,4,3,4,4", "--backs", "fill", "--flash-ms", "0", "--shift-colour", "4")
+    assert "0 timeouts" in err
+    over = [f for f in fs if f["rpm"] >= 6400]
+    assert len(over) >= 8 and True in [bool(f["gear"]) for f in over] and False in [bool(f["gear"]) for f in over]
+    flips = [b["t"] for a, b in zip(fs, fs[1:]) if a["rpm"] >= 6400 and b["rpm"] >= 6400 and bool(a["gear"]) != bool(b["gear"])]
+    assert len(flips) >= 2, flips
+    assert all(y - x >= 160 for x, y in zip(flips, flips[1:])), flips
+
+
 def check_dump():
     head, fs, err = frames("--seconds", "10", "--rtt", "10")
     assert head["handles"] == [5, 6] and head["canvas"] == [480, 180]
@@ -168,6 +180,7 @@ def check_camera():
 
 if __name__ == "__main__":
     check_gear_blink()
+    check_blink_rate()
     check_dump()
     check_nav()
     check_story()

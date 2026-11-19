@@ -10,7 +10,7 @@
 enum { HUD_FIELDS = 12 };
 
 /* Field zones in RPM. Fields 1-6 cover lo..yellow, 7-9 yellow..red, 10-12 red..shift. The bar flashes from
-   shift on. B58 default (owner, 2026-11-18): the bar ends at the 7000 redline, so 1000-5000 low, 5000-6000
+   shift on. B58 default (owner, 2026-11-18): the bar ends at the 7000 redline, so 0-5000 low (from 0: owner 2026-11-19), 5000-6000
    middle and 6000-7000 tallest. flash_ms is the half period of that flash;
    0 holds it steady (lit), since the car draws one frame per ~1.5 s (run 2). */
 typedef struct { int lo, yellow, red, shift, redline, flash_ms; } hud_profile;

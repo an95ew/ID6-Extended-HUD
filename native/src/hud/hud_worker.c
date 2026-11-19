@@ -337,17 +337,27 @@ static const char *mode_name(hud_drive_mode m)
     }
 }
 
-/* The gear blinks from the Shift point (owner 2026-11-18: only the gear, 6200..6600, default 6400): past it every new frame
-   flips the digit, so it blinks as fast as the HUD takes frames. Returns what to draw; *off is the phase. */
-static hud_anim blink_view(const hud_anim *a, int blink_rpm, int off)
+/* The gear blinks from the Shift point (owner 2026-11-18: only the gear, 6200..6600, default 6400): past it the next frame
+   flips the digit once a phase has been drawn for BLINK_MS. That is one flip per frame at the run-6 rate (161 ms a frame);
+   owner 2026-11-19: faster frames must not blink faster. Returns what to draw. */
+enum { BLINK_MS = 160 };
+typedef struct { int off, drawn; uint32_t at; } blink_state;
+
+static hud_anim blink_view(const hud_anim *a, int blink_rpm, blink_state *k)
 {
     hud_anim v = *a;
     v.gear_alert = blink_rpm > 0 && a->rpm >= blink_rpm;
-    if (v.gear_alert && off) v.gear = 0;
+    if (!v.gear_alert) k->off = k->drawn = 0;
+    else if (k->drawn && (int32_t)(a->now_ms - k->at) >= BLINK_MS) { k->off = !k->off; k->drawn = 0; }
+    if (v.gear_alert && k->off) v.gear = 0;
     return v;
 }
 
-static int blink_next(const hud_anim *a, int blink_rpm, int off) { return blink_rpm > 0 && a->rpm >= blink_rpm ? !off : 0; }
+/* A frame with the current phase went out: its BLINK_MS start from the first one. */
+static void blink_drawn(const hud_anim *a, blink_state *k)
+{
+    if (!k->drawn) { k->drawn = 1; k->at = a->now_ms; }
+}
 
 static const char *scene_name(hud_scene s)
 {
@@ -456,7 +466,8 @@ static int run_dump(void)
     hud_settings set;
     hud_state st;
     hud_scene scene, last_scene = HUD_SCENE_NONE;
-    int shown = 0, have_key = 0, story = !strcmp(o.trace, "drive"), drawn = 0, blink_off = 0, drawn_gear = 0, cam_key = -1;
+    int shown = 0, have_key = 0, story = !strcmp(o.trace, "drive"), drawn = 0, drawn_gear = 0, cam_key = -1;
+    blink_state blink = { 0, 0, 0 };
     unsigned next_ev = 0;
     uint32_t t, end = (uint32_t)o.seconds * 1000u, frames = 0, route_start = 0;
     hud_sender_init(&s, sim_send, NULL);
@@ -541,14 +552,14 @@ static int run_dump(void)
             drawn = 0;
             cam_key = -1;
         } else if (scene == HUD_SCENE_RPM) {
-            hud_anim v = blink_view(&a, set.blink_rpm, blink_off);
+            hud_anim v = blink_view(&a, set.blink_rpm, &blink);
             hud_strip_key k;
             cam_key = -1;
             v.cam_limit = cam_mode == 1 ? cam_limit : 0;
             k = hud_strip_key_of(&o.prof, &o.geom, &v);
             if (!have_key || !hud_strip_key_equal(&k, &last_key)) {
                 if (hud_strip_frame(&b, &o.prof, &o.pal, &o.geom, &o.hh, &v, &shown) > 0) drawn = 1;
-                blink_off = blink_next(&a, set.blink_rpm, blink_off);
+                blink_drawn(&a, &blink);
                 drawn_gear = v.gear;
                 last_key = k;
                 have_key = 1;
@@ -682,7 +693,8 @@ static int run_car(void)
     hud_nav_info nav;
     hud_nav_sent nav_sent;
     hud_strip_key last_key;
-    int shown = 0, have_key = 0, drawn = 0, fd = -1, blink_off = 0;
+    int shown = 0, have_key = 0, drawn = 0, fd = -1;
+    blink_state blink = { 0, 0, 0 };
     pid_t child = -1;
     hud_rg_file rgf;
     hud_rg_track rgt;
@@ -939,7 +951,7 @@ static int run_car(void)
                         have_key = 0;
                     }
                 } else if (scene == HUD_SCENE_RPM) {
-                    hud_anim v = blink_view(&a, set.blink_rpm, blink_off);
+                    hud_anim v = blink_view(&a, set.blink_rpm, &blink);
                     hud_strip_key k;
                     cam_key = -1;
                     v.cam_limit = cam_mode == 1 ? cam_limit : 0;
@@ -948,7 +960,7 @@ static int run_car(void)
                         hud_batch_init(&b);
                         if (hud_strip_frame(&b, &o.prof, &o.pal, &o.geom, &o.hh, &v, &shown) > 0) {
                             hud_sender_submit(&s, &b, t);
-                            blink_off = blink_next(&a, set.blink_rpm, blink_off);
+                            blink_drawn(&a, &blink);
                             /* lag: from the revs' sample to this frame's last answer */
                             if (o.mode == M_LIVE && a.have && !lag_wait) { lag_sample = last_sample; lag_done = s.st.done; lag_wait = 1; }
                         }

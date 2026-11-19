@@ -80,10 +80,10 @@ static void test_fields(void) {
     double lo, hi;
     int i;
     hud_profile_b58(&p);
-    /* Owner, 2026-11-18: low 1000-5000, middle 5000-6000, tallest 6000 to the 7000 redline; the zones follow the end. */
+    /* Owner, 2026-11-18: low 0-5000 (from 0 since 2026-11-19, was 1000), middle 5000-6000, tallest 6000 to the 7000 redline; the zones follow the end. */
     assert(p.shift == 7000 && p.yellow == 5000 && p.red == 6000);
     hud_field_span(&p, 0, &lo, &hi);
-    assert(lo == 1000 && hi > 1666 && hi < 1667);
+    assert(lo == 0 && hi > 833 && hi < 834);
     hud_field_span(&p, 5, &lo, &hi);
     assert(hi == 5000);
     hud_field_span(&p, 6, &lo, &hi);
@@ -139,8 +139,14 @@ static void test_frames(void) {
     uint32_t t;
     hud_profile_b58(&p); hud_palette_default(&pal); hud_geom_default(&g); hud_handles_default(&h);
 
-    /* The default palette draws every unlit field grey: one colour change for the twelve. */
+    /* Owner 2026-11-19: the bar fills from 0, so idle (800) lights most of the first field and nothing else. */
     steady(&a, 800, 10000);
+    {
+        hud_strip_key k = hud_strip_key_of(&p, &g, &a);
+        assert(k.full == 0 && k.partial_px > 0);
+    }
+    /* The default palette draws every unlit field grey: one colour change for the twelve. */
+    steady(&a, 0, 10000);
     hud_batch_init(&b);
     assert(hud_strip_frame(&b, &p, &pal, &g, &h, &a, &shown) == 1 + 1 + 12 + 1);
     shown = 0;
@@ -198,7 +204,7 @@ static void test_frames(void) {
        are text areas. */
     h.static_backs = 1;
     h.static_h = 7;
-    steady(&a, 3000, 10000);
+    steady(&a, 2500, 10000);   /* three fields exactly */
     hud_batch_init(&b);
     n = hud_strip_frame(&b, &p, &pal, &g, &h, &a, &shown);
     assert(count(&b, HUD_POLYGON) == 2 + 1 && n == 1 + 1 + 3 + 1);
@@ -242,7 +248,7 @@ static void test_frames(void) {
         }
     /* Run 3: yellow and red came out the same orange on the HUD (no red index), so the zones differ in height:
        at idle every field is drawn, base lowest, red tallest. */
-    steady(&a, 800, 10000);
+    steady(&a, 0, 10000);
     a.gear = 0;
     hud_batch_init(&b);
     hud_strip_frame(&b, &p, &pal, &g, &h, &a, &shown);
@@ -276,7 +282,7 @@ static void test_frames(void) {
     pal.shift_on = 4;
     pal.backs = HUD_BACKS_NONE;
     p.flash_ms = 0;
-    steady(&a, 800, 10000); a.gear = 0;
+    steady(&a, 0, 10000); a.gear = 0;
     hud_batch_init(&b);
     assert(hud_strip_frame(&b, &p, &pal, &g, &h, &a, &shown) == 2);          /* idle: RemoveAll + switch, nothing lit */
     steady(&a, 6200, 10000); a.gear = 3;
@@ -291,7 +297,7 @@ static void test_frames(void) {
     assert(count(&b, HUD_POLYGON) == 12 + 5);
     /* Outline backs: line width 1, line colour base_off, fill 0, then the unlit fields. */
     pal.backs = HUD_BACKS_OUTLINE;
-    steady(&a, 800, 10000); a.gear = 0;
+    steady(&a, 0, 10000); a.gear = 0;
     hud_batch_init(&b);
     hud_strip_frame(&b, &p, &pal, &g, &h, &a, &shown);
     assert(b.call[1].fkt == HUD_LINE_WIDTH && b.call[2].fkt == HUD_LINE_COLOR && b.call[2].p[2] == pal.base_off);
@@ -932,6 +938,28 @@ static void raster(const hud_batch *b, int w, int h, unsigned char *px) {
     }
 }
 
+/* Car run 7 (2026-11-19): a polygon painted over another one did not show on the HUD (the partly lit field stayed dark).
+   Returns how many pixels more than one polygon of the batch paints. */
+static int overlap_px(const hud_batch *b, int w, int h) {
+    static unsigned char hits[480 * 180];
+    unsigned c;
+    int i, x, y, n = 0;
+    memset(hits, 0, sizeof hits);
+    for (c = 0; c < b->n; c++) {
+        const hud_call *k = &b->call[c];
+        hud_point q[HUD_MAX_POINTS];
+        if (k->fkt != HUD_POLYGON) continue;
+        for (i = 0; i < k->p[5]; i++) {
+            q[i].x = (int16_t)(k->p[6 + 4 * i] << 8 | k->p[7 + 4 * i]);
+            q[i].y = (int16_t)(k->p[8 + 4 * i] << 8 | k->p[9 + 4 * i]);
+        }
+        for (y = 0; y < h; y++)
+            for (x = 0; x < w; x++)
+                if (inside(q, k->p[5], x, y) && hits[y * w + x]++ == 1) n++;
+    }
+    return n;
+}
+
 /* Car run 6 W1-W3 (IMG_9797..9799): the HUD draws a polygon's edges too, so a join along a bottom line that crosses
    empty space shows as a thin line (it ran from the gear to the RPM). Returns 1 if a horizontal edge has a pixel
    with nothing painted on either side of it, from row y_min down. */
@@ -1006,6 +1034,15 @@ static void test_split(void) {
     hud_batch_init(&b);
     n = hud_strip_frame(&b, &p, &pal, &g, &h, &a, &shown);
     assert(count(&b, HUD_FILL_COLOR) == 2 && count(&b, HUD_POLYGON) == 7 && n == 1 + 2 + 7 + 1);
+    /* No polygon paints over another, at any revs (1500: the second field partly lit, car run 7). */
+    for (rpm = 0; rpm <= 7600; rpm += 25) {
+        steady(&a, rpm, 10000);
+        a.gear = 4;
+        a.peak = rpm + 300;
+        hud_batch_init(&b);
+        assert(hud_strip_frame(&b, &p, &pal, &g, &h, &a, &shown) > 0);
+        if (overlap_px(&b, 120, 72)) { fprintf(stderr, "overlap at %d rpm: %d px\n", rpm, overlap_px(&b, 120, 72)); assert(0); }
+    }
     /* ... and paints exactly what one polygon per outline paints, for every frame of the sweep below. */
     {
         static unsigned char one[120 * 72], merged[120 * 72];
