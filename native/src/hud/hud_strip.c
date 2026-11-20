@@ -40,46 +40,7 @@ void hud_palette_default(hud_palette *p)
 
 uint8_t hud_cam_ink(const hud_palette *p) { return p->cam ? p->cam : p->alert ? p->alert : p->ink; }
 
-void hud_geom_default(hud_geom *g)
-{
-    g->canvas_w = 480;
-    g->canvas_h = 180;
-    g->x = 258;
-    g->y = 54;
-    g->w = 208;
-    g->h = 30;
-    g->gap = 3;
-    g->slant = 7;
-    g->gear_cx = 362;
-    g->gear_top = 104;
-    g->gear_h = 44;
-    g->rise = 0;
-    g->rpm_x1 = g->rpm_h = g->solid_digits = g->merge_pts = 0;
-}
-
-void hud_geom_for_canvas(hud_geom *g, int canvas_w, int canvas_h)
-{
-    hud_geom d;
-    double sx, sy;
-    hud_geom_default(&d);
-    sx = (double)canvas_w / d.canvas_w;
-    sy = (double)canvas_h / d.canvas_h;
-    g->canvas_w = canvas_w;
-    g->canvas_h = canvas_h;
-    g->x = (int)lround(d.x * sx);
-    g->y = (int)lround(d.y * sy);
-    g->w = (int)lround(d.w * sx);
-    g->h = (int)lround(d.h * sy);
-    g->gap = d.gap * sx < 1 ? 1 : (int)lround(d.gap * sx);
-    g->slant = (int)lround(d.slant * sx);
-    g->gear_cx = (int)lround(d.gear_cx * sx);
-    g->gear_top = (int)lround(d.gear_top * sy);
-    g->gear_h = (int)lround(d.gear_h * sy);
-    g->rise = 0;
-    g->rpm_x1 = g->rpm_h = g->solid_digits = g->merge_pts = 0;
-}
-
-void hud_geom_big(hud_geom *g, int canvas_w, int canvas_h)
+void hud_geom_split(hud_geom *g, int canvas_w, int canvas_h)
 {
     g->canvas_w = canvas_w;
     g->canvas_h = canvas_h;
@@ -89,20 +50,12 @@ void hud_geom_big(hud_geom *g, int canvas_w, int canvas_h)
     g->h = canvas_h * 24 / 72;
     g->gap = canvas_w / 120 + 1;
     g->slant = canvas_w / 20;
-    g->gear_cx = canvas_w / 2;
     g->gear_top = g->y + g->h + canvas_h / 18;
     g->gear_h = canvas_h - g->gear_top - 2;
-    g->rise = g->h / 4;
-    g->rpm_x1 = g->rpm_h = g->solid_digits = g->merge_pts = 0;
-}
-
-void hud_geom_split(hud_geom *g, int canvas_w, int canvas_h)
-{
-    hud_geom_big(g, canvas_w, canvas_h);
     g->gear_cx = g->x + g->gear_h * 6 / 11 / 2;   /* left edge on the strip's */
+    g->rise = g->h / 4;
     g->rpm_x1 = g->x + g->w;
     g->rpm_h = g->gear_h * 4 / 5;                 /* a step smaller: the gear leads */
-    g->solid_digits = 1;
     g->merge_pts = HUD_MAX_POINTS;
 }
 
@@ -236,29 +189,6 @@ static uint8_t color_of(const hud_palette *pal, int zone, int on)
     if (zone == 0) return on ? pal->base_on : pal->base_off;
     if (zone == 1) return on ? pal->yellow_on : pal->yellow_off;
     return on ? pal->red_on : pal->red_off;
-}
-
-/* Segments a..g of a 7-segment digit. Bit 0 is a. */
-static const uint8_t k_seg[10] = { 0x3F, 0x06, 0x5B, 0x4F, 0x66, 0x6D, 0x7D, 0x07, 0x7F, 0x6F };
-
-static void seg_poly(const hud_geom *g, int s, hud_point pt[4])
-{
-    int h = g->gear_h, w = h * 6 / 11, t = h / 7 < 2 ? 2 : h / 7;
-    int x0 = g->gear_cx - w / 2, y0 = g->gear_top, ym = y0 + h / 2 - t / 2, y1 = y0 + h - t;
-    int x = 0, y = 0, sw = 0, sh = 0;
-    switch (s) {
-    case 0: x = x0;         y = y0; sw = w; sh = t; break;              /* a */
-    case 1: x = x0 + w - t; y = y0; sw = t; sh = h / 2; break;          /* b */
-    case 2: x = x0 + w - t; y = ym; sw = t; sh = h - (ym - y0); break;  /* c */
-    case 3: x = x0;         y = y1; sw = w; sh = t; break;              /* d */
-    case 4: x = x0;         y = ym; sw = t; sh = h - (ym - y0); break;  /* e */
-    case 5: x = x0;         y = y0; sw = t; sh = h / 2; break;          /* f */
-    default: x = x0;        y = ym; sw = w; sh = t; break;              /* g */
-    }
-    pt[0].x = (int16_t)x;        pt[0].y = (int16_t)y;
-    pt[1].x = (int16_t)(x + sw); pt[1].y = (int16_t)y;
-    pt[2].x = (int16_t)(x + sw); pt[2].y = (int16_t)(y + sh);
-    pt[3].x = (int16_t)x;        pt[3].y = (int16_t)(y + sh);
 }
 
 int hud_rpm_shown(double rpm) { return rpm <= 0 ? 0 : (int)(rpm / 50.0 + 0.5) * 50; }
@@ -405,17 +335,10 @@ int hud_strip_frame(hud_batch *b, const hud_profile *p, const hud_palette *pal, 
     if (k.gear >= 1 && k.gear <= 9 && g->gear_h > 0) {
         uint8_t ink = !k.shifting ? (k.gear_alert && pal->alert ? pal->alert : pal->ink)
                     : pal->shift_on ? pal->shift_on : k.flash_on ? pal->red_on : pal->red_off;
-        if (g->solid_digits) {
-            hud_point dp[HUD_DIGIT_PTS];
-            int dw = digit_w(g->gear_h);
-            int np = hud_digit_poly(k.gear, g->gear_cx - dw / 2, g->gear_top, dw, g->gear_h, digit_t(g->gear_h), dp);
-            if (emit_pen(&e, ink) || emit_outline(&e, dp, (unsigned)np)) goto full;
-        } else
-            for (i = 0; i < 7; i++) {
-                if (!(k_seg[k.gear] >> i & 1)) continue;
-                seg_poly(g, i, pt);
-                if (emit_pen(&e, ink) || emit_outline(&e, pt, 4)) goto full;
-            }
+        hud_point dp[HUD_DIGIT_PTS];
+        int dw = digit_w(g->gear_h);
+        int np = hud_digit_poly(k.gear, g->gear_cx - dw / 2, g->gear_top, dw, g->gear_h, digit_t(g->gear_h), dp);
+        if (emit_pen(&e, ink) || emit_outline(&e, dp, (unsigned)np)) goto full;
     }
     if (k.cam_limit && g->rpm_h > 0 && g->gear_h > 0) {
         /* Camera alert with the bar (design approved 2026-11-19): the camera in the gap right of the gear, the limit where

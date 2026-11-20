@@ -98,16 +98,17 @@ for f in ExtendedHUD/*; do [ "$(ssh root@<HEAD_IP> "cat $D/$(basename $f)" | sha
 Hold the volume knob until the screen goes dark (about 30 s). The SSH connection drops, which is normal. Then open
 **My Vehicle → ExtendedHUD**:
 
-| Row | Does |
+The main page has a status line (Off / Starting / Running) and three submenus:
+
+| Submenu → row | Does |
 |---|---|
-| status line | Off / Starting / Running |
-| Sport Bar | the rev bar with the engine running in D/S/M, in Sport and Sport+ |
-| Always show Sport Bar | the bar in every driving mode |
-| Shift point | the gear starts blinking at 6,200–6,600 RPM |
-| Display Speed Camera Warning | the camera icon, its limit and the distance, from the warning distance before the camera to 50 m past it, only for cameras that watch your direction |
-| Orange camera warning | the camera and its limit in orange instead of white |
-| Warning distance | 300, 500 (default) or 800 m |
-| App information | the version and release date, and the camera list's country and **data date** |
+| Sport Bar → Show Sport Bar | the rev bar with the engine running in D/S/M, in Sport and Sport+ |
+| Sport Bar → Always show Sport Bar | the bar in every driving mode |
+| Sport Bar → Shift point | the gear starts blinking at 6,200–6,600 RPM |
+| Speed Camera Warning → Show camera warning | the camera icon, its limit and the distance, from the warning distance before the camera to 50 m past it, only for cameras that watch your direction |
+| Speed Camera Warning → Orange camera warning | the camera and its limit in orange instead of white |
+| Speed Camera Warning → Warning distance | 300, 500 (default) or 800 m |
+| App information | the version and release date, and the camera list as `UA-426-2026-11-19` (country, cameras, **data date**) |
 
 The camera warning needs the car's GPS (shipped in `cds.txt`) and the engine running.
 
@@ -122,7 +123,7 @@ python3 tools/cameras_build.py --country UnitedKingdom --fetch-osm /tmp/gb-osm.j
 ```
 
 Then copy `cameras.txt` to the app folder (upload as `cameras.txt.new`, read it back, `mv` it over the old one) and untick and tick
-Display Speed Camera Warning. Countries and their sources: `tools/cameras_sources.json`.
+Show camera warning. Countries and their sources: `tools/cameras_sources.json`.
 
 ## Update the app
 
@@ -145,5 +146,5 @@ Then restart iDrive. If the HMI ever keeps restarting, SSH stays reachable: remo
 | no ExtendedHUD in My Vehicle | step 3 (symbols); files all `ok` in step 5; the iDrive restart. Some cars may need the head unit's apps coding (A4A / remote apps): not needed on the tested car |
 | status "Off: remove HudTest first" | another HUD app is installed |
 | no bar while revving | P, N or R, or Comfort without "Always"; the log: `ssh root@<HEAD_IP> 'on -f hu-omap cat /tmp/hud-sportbar.log'` (single node: `cat /tmp/hud-sportbar.log`) |
-| no camera warning | engine off; "Display Speed Camera Warning" unticked; the camera watches the other direction; App information says "no list installed" |
-| App information: "data date unknown" | an old or hand-made `cameras.txt`: rebuild it (step 7) |
+| no camera warning | engine off; "Show camera warning" unticked; the camera watches the other direction; App information says "no list installed" |
+| App information: a "?" in the camera line | an old or hand-made `cameras.txt`: rebuild it (step 7) |

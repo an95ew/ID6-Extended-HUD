@@ -219,7 +219,9 @@ input[type=color] { width: 40px; height: 24px; border: 0; background: none; padd
     ctx.font = '700 24px "Saira Semi Condensed", sans-serif'; ctx.textAlign = "center"; ctx.fillStyle = "#222"; ctx.fillText(tab === "rpm" ? "100" : "50", 54, 97);
     const f = run.frames[Math.max(0, fi - 1)];
     const ratio = [0, 5, 3.2, 2.143, 1.72, 1.314, 1, .822, .64];
-    const kph = f && f.gear ? Math.round(f.rpm / (ratio[f.gear] * 3.15) * 2.04 * 60 / 1000) : 0;
+    let gear = 0;   // the last gear shown: past the Shift point the digit blinks, the car keeps its speed
+    for (let i = fi - 1; i >= 0 && !gear; i--) gear = run.frames[i].gear || (run.frames[i].rpm < 1000 ? -1 : 0);
+    const kph = f && gear > 0 ? Math.round(f.rpm / (ratio[gear] * 3.15) * 2.04 * 60 / 1000) : 0;
     ctx.font = '600 68px "Saira Semi Condensed", sans-serif'; ctx.fillStyle = ink(); ctx.fillText(String(kph), 192, 106);
     ctx.font = '500 15px "Saira Semi Condensed", sans-serif'; ctx.fillText("km/h", 192, 128);
     if (st && st.factory_nav) {   // the factory's own guidance owns the right half; our images are cleared
@@ -230,13 +232,15 @@ input[type=color] { width: 40px; height: 24px; border: 0; background: none; padd
     ctx.restore();
   }
   function draw(st) {
-    const [W, H] = run.head.canvas, sx = cv.width / W, sy = cv.height / H;
+    // Our image (82/02 31/32, 120x72) sits right of the factory speed, at x 250..466, y 36..166 of the 480x180 picture.
+    const [W, H] = run.head.canvas, k0 = cv.width / 480, sx = 216 * k0 / W, sy = 130 * k0 / H, ox = 250 * k0, oy = 36 * k0;
     ctx.fillStyle = "#000"; ctx.fillRect(0, 0, cv.width, cv.height);
     factory(cv.width / 480, cv.height / 180, st);
+    ctx.save(); ctx.setLineDash([3 * k0, 3 * k0]); ctx.strokeStyle = "rgba(255,255,255,.18)"; ctx.strokeRect(ox, oy, W * sx, H * sy); ctx.restore();
     Object.keys(images).map(Number).sort((a, b) => a - b).forEach(h => {
       if (!visible[h]) return;
       images[h].forEach(it => {
-        ctx.beginPath(); it.pts.forEach(([x, y], i) => i ? ctx.lineTo(x * sx, y * sy) : ctx.moveTo(x * sx, y * sy)); ctx.closePath();
+        ctx.beginPath(); it.pts.forEach(([x, y], i) => i ? ctx.lineTo(ox + x * sx, oy + y * sy) : ctx.moveTo(ox + x * sx, oy + y * sy)); ctx.closePath();
         ctx.fillStyle = colours[it.c] || "#ff00ff"; ctx.fill();
       });
     });

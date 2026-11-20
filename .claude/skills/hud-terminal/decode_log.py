@@ -1,12 +1,12 @@
 #!/usr/bin/env python3
-"""Summarises a HUD worker log taken with --log (every terminal call and answer on stderr), so a car result is read from the
-raw lines and not guessed (run 1 blamed the car for our sender; run 4's T0 "unanswered call" was an op F without a handle).
+"""Summarises a HUD worker log captured with --log (every terminal call and reply on stderr), ensuring
+hardware results are verified directly from raw protocol lines rather than inferred.
 
     python3 .claude/skills/hud-terminal/decode_log.py LOG [LOG ...]
 
-Per function ID: calls sent, answers by OpType (D ResultAck = OK on this car, C Result, 9 ErrorAck, F Error, A ProcessingAck),
-answers that carry no handle (the sender cannot match them: strays, then a 1.5 s timeout), and the worker's last stats line.
-Exit status 1 when any error, unmatched answer, timeout or dropped batch shows up."""
+Per function ID: calls sent, replies by OpType (D ResultAck = OK on NBT Evo/6WB, C Result, 9 ErrorAck, F Error,
+A ProcessingAck), replies missing a handle (unmatchable strays that lead to 1.5 s timeouts), and the worker's
+final stats line. Exit status 1 if any error, unmatched reply, timeout, or dropped batch is detected."""
 import re
 import sys
 from collections import Counter, defaultdict

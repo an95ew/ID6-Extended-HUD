@@ -6,7 +6,7 @@ timing the simulated round trip gives. Three tabs:
 
   Drive story   --trace drive: menu settings, driving modes and the factory navigation change over two
                 minutes, and the worker's scene logic decides what the HUD shows
-  Sport Bar     --trace pull at several round trips
+  Sport Bar     --trace pull as installed (the split bar, the only layout)
   Speed camera  --scene cam: a camera passed alone (the whole picture) and next to the Sport Bar (badge + limit)
 
     python3 tools/hud_preview.py -o /tmp/hud-preview.html
@@ -38,15 +38,13 @@ def dump(tab, label, args):
 def main():
     ap = argparse.ArgumentParser()
     ap.add_argument("-o", "--out", required=True)
-    ap.add_argument("--rtt", action="append", default=None,
-                    help="round trip in ms for the Sport Bar tab; repeat to compare (default 5, 10, 20)")
     a = ap.parse_args()
-    runs = [dump("story", "10 ms round trip", ["--trace", "drive", "--rtt", "10"])]
-    for rtt in a.rtt or ["5", "10", "20"]:
-        runs.append(dump("rpm", f"{rtt} ms round trip", ["--trace", "pull", "--seconds", "20", "--rtt", rtt]))
-    split = ["--layout", "split", "--canvas", "120x72", "--handles", "31,32", "--palette", "3,4,3,4,3,4,4",
-             "--in-flight", "32", "--pipeline", "--rtt", "260"]
-    runs.append(dump("cam", "Camera pass · as installed (split bar, 260 ms round trip)", ["--scene", "cam", *split]))
+    # the plugin's own flags (hud_app_worker_argv)
+    split = ["--layout", "split", "--flash-ms", "0", "--palette", "3,4,3,4,3,4,4", "--shift-colour", "4", "--backs", "fill",
+             "--canvas", "120x72", "--handles", "31,32", "--in-flight", "32", "--pipeline", "--rtt", "260"]
+    runs = [dump("story", "10 ms round trip", ["--trace", "drive", "--rtt", "10"]),
+            dump("rpm", "As installed (split bar, 260 ms round trip)", ["--trace", "pull", "--seconds", "20", *split]),
+            dump("cam", "Camera pass · as installed (split bar, 260 ms round trip)", ["--scene", "cam", *split])]
     with open(TEMPLATE, encoding="utf-8") as f:
         page = f.read()
     page = page.replace("/*__RUNS__*/[]", json.dumps(runs, ensure_ascii=False, separators=(",", ":")))

@@ -136,7 +136,10 @@ static void test_frames(void) {
     hud_batch b;
     int shown = 0, worst = 0, n, rpm, gear;
     uint32_t t;
-    hud_profile_b58(&p); hud_palette_default(&pal); hud_geom_default(&g); hud_handles_default(&h);
+    hud_profile_b58(&p); hud_palette_default(&pal); hud_handles_default(&h);
+    hud_geom_split(&g, 120, 72);
+    g.merge_pts = 0;   /* one polygon per outline and no RPM readout, so the counts below read field by field */
+    g.rpm_h = 0;
 
     /* Owner 2026-11-19: the bar fills from 0, so idle (800) lights most of the first field and nothing else. */
     steady(&a, 800, 10000);
@@ -226,13 +229,8 @@ static void test_frames(void) {
     hud_batch_init(&b);
     assert(hud_swatches(&b, 5, &g, 0) == 33 && b.call[1].p[2] == 0 && b.call[31].p[2] == 15);
 
-    /* The layout scales with the canvas. */
-    hud_geom_for_canvas(&g, 960, 360);
-    assert(g.x == 516 && g.w == 416 && g.gear_h == 88);
-
-    /* Run 2: on the HUD's 120x72 image the scaled layout used x 64..116, y 22..34. The big one fills it, peak marker
-       and gear digit included, and every frame still fits a batch. */
-    hud_geom_big(&g, 120, 72);
+    /* The split layout fills the HUD's 120x72 image (run 2: 82/02 31/32), peak marker, gear and RPM included, and
+       every frame stays inside it. */
     hud_handles_default(&h);   /* backs drawn every frame, as on the car */
     assert(g.x + g.w <= 120 && g.w >= 110 && g.y - 8 >= 0 && g.gear_top > g.y + g.h);
     assert(g.gear_top + g.gear_h <= 72 && g.gear_h >= 28);
@@ -287,13 +285,13 @@ static void test_frames(void) {
     steady(&a, 6200, 10000); a.gear = 3;
     hud_batch_init(&b);
     hud_strip_frame(&b, &p, &pal, &g, &h, &a, &shown);
-    assert(count(&b, HUD_FILL_COLOR) == 2 && count(&b, HUD_POLYGON) == 9 + 1 + 5);   /* 3 for fields, 4 for the "3" */
+    assert(count(&b, HUD_FILL_COLOR) == 2 && count(&b, HUD_POLYGON) == 9 + 1 + 1);   /* 3 for fields, 4 for the "3" */
     steady(&a, 7100, 10000); a.gear = 3;   /* steady() resets the gear */
     hud_batch_init(&b);
     hud_strip_frame(&b, &p, &pal, &g, &h, &a, &shown);
     for (n = 0; n < (int)b.n; n++)
         if (b.call[n].fkt == HUD_FILL_COLOR) assert(b.call[n].p[2] == 4);   /* bar and digit white */
-    assert(count(&b, HUD_POLYGON) == 12 + 5);
+    assert(count(&b, HUD_POLYGON) == 12 + 1);
     /* Outline backs: line width 1, line colour base_off, fill 0, then the unlit fields. */
     pal.backs = HUD_BACKS_OUTLINE;
     steady(&a, 0, 10000); a.gear = 0;
@@ -688,16 +686,17 @@ static void test_app(void) {
     /* The App information page: the release from the build, the camera list's country, size and date from cameras.txt */
     {
         char label[128], line[256];
-        const char *txt = "# ExtendedHUD speed cameras\n# country Ukraine\n# date 2026-11-19\n# 3 fixed\n50.1 30.2 50 10\n"
+        const char *txt = "# ExtendedHUD speed cameras\n# country Ukraine\n# iso UA\n# date 2026-11-19\n# 3 fixed\n50.1 30.2 50 10\n"
                           "  50.2 30.3 110 -1\r\n\n50.3 30.4 50 200\n";
         hud_cams_meta m;
         FILE *f;
         memset(&m, 0, sizeof m);
         hud_app_cameras_line(&m, "# date 2026-11-19\r\n");
         hud_app_cameras_line(&m, "# country United Kingdom \n");
+        hud_app_cameras_line(&m, "# iso GB\n");
         hud_app_cameras_line(&m, "# date 19.11.2026\n");              /* not YYYY-MM-DD: ignored */
         hud_app_cameras_line(&m, "51.5 -0.1 30 90");
-        assert(m.count == 1 && !strcmp(m.date, "2026-11-19") && !strcmp(m.country, "United Kingdom"));
+        assert(m.count == 1 && !strcmp(m.date, "2026-11-19") && !strcmp(m.country, "United Kingdom") && !strcmp(m.iso, "GB"));
         hud_app_version_label(label, sizeof label);
         assert(!strcmp(label, "Version " HUD_APP_VERSION ", released " HUD_APP_RELEASED));
         hud_app_cameras_label(dir, label, sizeof label);
@@ -705,17 +704,20 @@ static void test_app(void) {
         snprintf(path, sizeof path, "%s/cameras.txt", dir);
         assert((f = fopen(path, "w")) && fputs(txt, f) >= 0 && fclose(f) == 0);
         hud_app_cameras_label(dir, label, sizeof label);
-        assert(!strcmp(label, "Speed cameras: Ukraine, 3, data from 2026-11-19"));
+        assert(!strcmp(label, "Speed cameras: UA-3-2026-11-19"));   /* one short line: the page cuts long text (car run 8) */
+        assert((f = fopen(path, "w")) && fputs("# country Ukraine\n# date 2026-11-19\n50.1 30.2 50 10\n", f) >= 0 && fclose(f) == 0);
+        hud_app_cameras_label(dir, label, sizeof label);
+        assert(!strcmp(label, "Speed cameras: Ukraine-1-2026-11-19"));   /* a list from before "# iso" */
         assert((f = fopen(path, "w")) && fputs("50.1 30.2 50 10\n", f) >= 0 && fclose(f) == 0);
         hud_app_cameras_label(dir, label, sizeof label);
-        assert(!strcmp(label, "Speed cameras: country unknown, 1, data date unknown"));
+        assert(!strcmp(label, "Speed cameras: ?-1-?"));
         remove(path);
         /* the shipped list names its country and date (tools/cameras_build.py) */
         memset(&m, 0, sizeof m);
         assert((f = fopen("plugin/cameras.txt", "r")));
         while (fgets(line, sizeof line, f)) hud_app_cameras_line(&m, line);
         fclose(f);
-        assert(m.count > 0 && strlen(m.date) == 10 && m.country[0]);   /* any country (update-speedcam-db) */
+        assert(m.count > 0 && strlen(m.date) == 10 && m.country[0] && strlen(m.iso) == 2);   /* any country (update-speedcam-db) */
     }
     argc = hud_app_worker_argv(HUD_APP_DIR, "169.254.21.3", buf, sizeof buf, argv, HUD_APP_MAX_ARGS);
     assert(argc > 10 && argv[argc] == NULL);

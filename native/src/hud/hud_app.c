@@ -163,6 +163,9 @@ void hud_app_cameras_line(hud_cams_meta *m, const char *line)
             if (strlen(date) == 10 && date[4] == '-' && date[7] == '-' && strspn(date, "0123456789-") == 10)
                 memcpy(m->date, date, 11);
         }
+        else if (header(line, "iso", date, sizeof date)) {
+            if (strlen(date) == 2) memcpy(m->iso, date, 3);
+        }
         else header(line, "country", m->country, sizeof m->country);
         return;
     }
@@ -183,8 +186,8 @@ void hud_app_cameras_label(const char *dir, char *out, size_t cap)
     memset(&m, 0, sizeof m);
     while (fgets(line, sizeof line, f)) hud_app_cameras_line(&m, line);
     fclose(f);
-    snprintf(out, cap, "Speed cameras: %s, %d, %s%s", m.country[0] ? m.country : "country unknown", m.count,
-             m.date[0] ? "data from " : "data date unknown", m.date);
+    snprintf(out, cap, "Speed cameras: %s-%d-%s", m.iso[0] ? m.iso : m.country[0] ? m.country : "?", m.count,
+             m.date[0] ? m.date : "?");
 }
 
 void hud_app_status(const hud_settings *s, int running, const char *conflict, int restarts, char *out, size_t cap)

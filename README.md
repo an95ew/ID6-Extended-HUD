@@ -4,7 +4,7 @@ Standalone BMW NBT Evo (iDrive 6) plugin and native QNX HUD worker that draws an
 **speed-camera warning** on the factory windscreen HUD of 6WB cars. It appears as **My Vehicle → ExtendedHUD**.
 
 Tested on an F34 340i (B58), NBT Evo firmware `NBTevo_X20511I`, split-node unit (`hu-jacinto` SSH / `hu-omap` HMI).
-Release **1.0.0** (2026-11-20).
+Release **0.0.1** (2026-11-20): [release notes](RELEASE-NOTES.md).
 
 **Install it on your car:** [INSTALL.md](INSTALL.md), or let your AI agent do it with you: [docs/AGENT-INSTALL-PROMPT.md](docs/AGENT-INSTALL-PROMPT.md).
 
@@ -25,9 +25,18 @@ CarPlay turn-by-turn navigation on the HUD is in development on the [`feature/na
 
 Special thanks to [inotbarnacle](https://github.com/inotbarnacle), the author of [ID6_apps_prerelease](https://github.com/inotbarnacle/ID6_apps_prerelease/tree/main). His findings and documentation were used to build and provide this plugin.
 
-## Photos
+## Pictures
 
-![Sport Bar HUD preview](photos/hud-preview.png)
+Rendered by the desk previewer (`native/tools/hud_preview.py`) from the worker's real HUD calls; the factory speed and sign
+on the left are simulated, our 120×72 image is the dashed box.
+
+| | |
+|---|---|
+| ![Sport Bar in 1st at 3,450 rpm](photos/sport-bar.png) | **Sport Bar:** the bar fills from 0, gear on the left, revs on the right |
+| ![Shift point: gear shown, then hidden](photos/shift-point.png) | **Shift point:** the bar is full, the gear digit blinks at a fixed rate |
+| ![Speed-camera warning alone](photos/camera-warning.png) | **Speed-camera warning:** camera, limit, and a bar that shrinks to the camera |
+| ![Camera badge next to the Sport Bar](photos/camera-with-bar.png) | **With the Sport Bar on:** a camera badge next to the gear, the limit in place of the revs |
+| ![Sport Bar at night](photos/night.png) | **At night** the factory HUD tints white toward orange by itself |
 
 ## What is included
 
@@ -35,6 +44,8 @@ Special thanks to [inotbarnacle](https://github.com/inotbarnacle), the author of
 ID6-Extended-HUD/
 ├── README.md
 ├── INSTALL.md                       # Install on your car (by hand or with an agent)
+├── RELEASE-NOTES.md                 # What changed in each release
+├── photos/                          # README pictures (desk previewer renders)
 ├── LICENSE                          # MIT (+ third-party/idrive7-apps-LICENSE)
 ├── docs/
 │   ├── AGENT-INSTALL-PROMPT.md      # Prompt to paste into Claude Code for an install or a camera update

@@ -55,7 +55,7 @@ def check_blink_rate():
 
 def check_dump():
     head, fs, err = frames("--seconds", "10", "--rtt", "10")
-    assert head["handles"] == [5, 6] and head["canvas"] == [480, 180]
+    assert head["handles"] == [5, 6] and head["canvas"] == [120, 72]   # the split layout on 82/02 31/32's size
     assert "0 timeouts" in err
     assert len(fs) > 80, len(fs)                 # about 11 fps at a 10 ms round trip
     hidden = None
@@ -77,13 +77,13 @@ def check_dump():
                 assert b[4] == 3 and len(b) == 4 * b[5] + 6
             if fkt != "20E":
                 assert int.from_bytes(b[:2], "big") == h
-    # The pull reaches the shift point, so some frames light every field and use no unlit colour, and the
-    # flash's off phase uses only unlit colours.
+    # The pull reaches the shift point, so some frames light every field (no unlit colour; the split layout merges
+    # the fields into a few polygons), and the flash's off phase uses only unlit colours.
     off = {head["palette"][i] for i in (0, 2, 4)}
     def colours(f):
         return {int(c[8:10], 16) for c in f["calls"] if c.startswith("21B:")}
-    assert any(not (colours(f) & off) and sum(c.startswith("21D:") for c in f["calls"]) >= 12 for f in fs)
-    assert any(colours(f) == off for f in fs if f["rpm"] >= 6395)   # the flash starts at 6,400
+    assert any(f["rpm"] >= 7000 and not (colours(f) & off) for f in fs)
+    assert any(colours(f) - {head["palette"][6]} == off for f in fs if f["rpm"] >= 6395)   # the flash starts at 6,400 (ink: gear, RPM)
     _, fs_static, _ = frames("--seconds", "10", "--rtt", "10", "--static-handle", "7")
     assert len(fs_static) > len(fs)
 

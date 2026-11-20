@@ -1,92 +1,84 @@
 ---
 name: hud-terminal
-description: Talk to the 6WB cluster/factory HUD picture over MOST (FBlock 0x82 HUDTerminal: instances 82/00 cluster and 82/02 HUD, image and text handles, function IDs, OpType D answers, palette indices, the visibility sequence, state that outlives our process) from native/src/hud (hud_proto, hud_sender, hud_most, hud_worker). Use for any change to what or how we draw on the HUD/cluster, reading a worker --log, or explaining a car result such as "nothing visible", timeouts, strays or a "shade" over the picture.
+description: Interface with the BMW 6WB cluster and factory windscreen HUD over MOST FBlock 0x82 (HUDTerminal: instances 82/00 cluster and 82/02 HUD, image/text handles, function IDs, OpType D replies, palette indices, visibility sequence, and persistent terminal state) via native/src/hud (hud_proto, hud_sender, hud_most, hud_worker). Use when changing HUD rendering, decoding a worker --log, or diagnosing blank displays, timeouts, strays, or overlay artifacts.
 ---
 
-# The HUD terminal (FBlock 0x82)
+# MOST HUDTerminal Protocol (`FBlock 0x82`)
 
-The factory navigation draws its arrows on the 6WB cluster and the windscreen HUD through the **HUDTerminal** MOST function block
-**0x82**. We send the same calls from our own process. Facts are tagged as in `.claude/rules/car-headunit.md`: **[car]** proven on the
-owner's F34 340i (NBT Evo X20511I, 6WB, factory HUD), **[static]** from binaries or docs. The rules file holds the authoritative
-tables; this skill shows how to use them.
+Factory navigation draws turn graphics on the 6WB cluster and factory windscreen HUD through MOST function block **`0x82` (`HUDTerminal`)**. ExtendedHUD sends the same protocol calls from its standalone worker process.
 
-| Part | File | Does |
+**Reference test platform:** 2018 BMW F34 340i (B58, 8-speed automatic), NBT Evo (iDrive 6, firmware `NBTevo_X20511I`, split-node `hu-jacinto` / `hu-omap`), 6WB digital cluster + factory windscreen HUD.
+Tags: **`[verified]`** observed on the reference vehicle; **`[static]`** from firmware inspection or protocol docs.
+
+## Source Map
+
+| Component | File | Role |
 |---|---|---|
-| Call encoding + validators | `src/hud/hud_proto.[ch]` | one function per call (`hud_polygon`, `hud_set_visibility`, …); `hud_call_valid` = the packaged worker's limits |
-| Batches, 3 in flight, answers | `src/hud/hud_sender.[ch]` | matches answers by (fkt, first u16 = handle); 1500 ms per-call timeout drops the rest of the frame |
-| MOST/DSI link | `src/hud/hud_most.c`, `src/most/` | `DSYSMOSTServer` via `libsys_dsi_colibry…so`, `dlopen`ed at run time |
-| What to draw | `hud_strip.c` (Sport Bar), `hud_cam.c` (speed-camera warning), `hud_scene.c`; the nav scene (`hud_nav.c`, `hud_text.c`, glyphs) is on the `feature/nav` branch | pure functions, host-tested |
-| The process | `src/hud/hud_worker.c` → `hud-sportbar-qnx` | probes, grids, swatches, parked/live drawing; `--log` prints every tx/rx |
-| Log reader | `.claude/skills/hud-terminal/decode_log.py` | per fkt: sent, answers by op, answers without a sent handle |
+| Call encoding & validation | `native/src/hud/hud_proto.[ch]` | Encoders per FktID (`hud_polygon`, `hud_set_visibility`, …); `hud_call_valid` enforces terminal limits |
+| Windowed / pipelined sender | `native/src/hud/hud_sender.[ch]` | Matches replies by `(fkt, handle)`; supports up to 32 in-flight calls and frame pipelining; 1,500 ms per-call timeout |
+| MOST/DSI transport | `native/src/hud/hud_most.c`, `native/src/most/` | Connects to `DSYSMOSTServer` via `libsys_dsi_colibry*.so` (`dlopen` at runtime) |
+| Scene & geometry | `hud_strip.c` (Sport Bar), `hud_cam.c` (speed cameras), `hud_scene.c` (`feature/nav` adds `hud_nav.c`, `hud_text.c`) | Pure C rendering logic, host-tested |
+| Worker binary | `native/src/hud/hud_worker.c` → `hud-sportbar-qnx` | Probes, grids, palette swatches, parked/live rendering; `--log` prints every `tx`/`rx` |
+| Log analyzer | `.claude/skills/hud-terminal/decode_log.py` | Summarizes calls sent, OpTypes received, unmatched replies, errors, and timeouts |
 
-## The data path
+## Data Path
 
+```text
+hud-sportbar-qnx ──DSI──▶ DSYSMOSTServer (hu-jacinto) ──MOST──▶ 6WB  ─┬─ 82/00 cluster nav graphic
+  (runs on hu-jacinto or hu-omap; hu-omap reaches server via Qnet)    └─ 82/02 factory HUD (host 0101)
 ```
-hud-sportbar-qnx ──DSI──▶ DSYSMOSTServer (hu-jacinto) ──MOST──▶ 6WB  ─┬─ 82/00 cluster nav picture
-  (jacinto or hu-omap; omap reaches the server over Qnet)             └─ 82/02 factory HUD  (host 0101)
-```
 
-- Calls are OpType **6** (StartResultAck) with the target handle as the first payload u16. **This car answers with op D**
-  (ResultAck): accept C and D as success, 9/F as errors, A as a note only. A sender that waits for C drops everything (the run-1 bug). [car]
-- Limits [static]: ≤ 48 calls per batch, ≤ 3 awaiting an answer, 1500 ms per answer, ~5 s per batch. In the car one call takes
-  ~65 ms (3 in flight), so **20–26 calls ≈ 1.3–2.1 s per frame**: no fast blinks, few calls per frame. [car]
-- The worker runs the same from hu-jacinto and from **hu-omap** (`on -f hu-omap`, `LD_LIBRARY_PATH=/lib:/usr/lib:/boot/lib:/opt/sys/lib`). [car]
+- Calls use OpType **`6`** (`StartResultAck`) with the target handle as the first `uint16` payload field. Reference hardware replies with OpType **`D`** (`ResultAck`): accept `C` and `D` as success, `9`/`F` as errors, and `A` as processing status. A sender that accepts only `C` drops every reply `[verified]`.
+- **Protocol & throughput limits:** ≤ 48 calls per batch, 1,500 ms per-call timeout, ~5 s batch deadline `[static]`. Individual replies take ~250 ms regardless of in-flight window (`3..32`). With merged geometry (≤ 12 calls/frame) and pipelined frames (`--pipeline`, window `32`), measured throughput is **~160 ms/frame (~6 fps)** vs. ~1.5–2 s unpipelined `[verified]`.
+- The worker runs identically from `hu-jacinto` or `hu-omap` (`on -f hu-omap`, with `LD_LIBRARY_PATH=/lib:/usr/lib:/boot/lib:/opt/sys/lib`) `[verified]`.
 
-## What draws where (82/02 = HUD)
+## Handle Map (`82/02` Factory HUD)
 
-| Handle | Size on 82/02 | Use |
+| Handle | Dimensions on `82/02` | Purpose |
 |---|---|---|
-| **31/32 (0x1F/0x20)** | 120×72 | **our double buffer**: the only pair that shows on the HUD, right of the factory speed |
-| 23 (0x17) | 250×116 | nav container: **`SetVisibility(0x17,1)` is required** or nothing shows; it stays set |
-| 26/27 (0x1A/0x1B) | text areas | `TextareaSetText` + `SetVisibility` shows street / distance in the factory font, Latin and Cyrillic [car] |
-| 33/34, 37, 46 | 120×72 | accepted, draw in the same place as 31/32. **Never leave them visible** (see "State that outlives us") |
-| 19/20, 44/45 | | accepted, nothing visible |
+| **`31`/`32` (`0x1F`/`0x20`)** | 120×72 | **Double-buffered canvas**: active drawing pair to the right of the factory speed readout |
+| `23` (`0x17`) | 250×116 | Navigation container: **`SetVisibility(0x17, 1)` is mandatory** before graphics appear; persists until sleep |
+| `26`/`27` (`0x1A`/`0x1B`) | Text areas | `TextareaSetText` + `SetVisibility` renders factory-font street/distance text (Latin & Cyrillic) `[verified]` |
+| `33`/`34`, `37`, `46` | 120×72 | Accepted, overlap `31`/`32`. **Always keep hidden** (see persistent state below) |
+| `19`/`20`, `44`/`45` | — | Accepted, render no visible output |
 
-Working frame: `ImageRemoveAllItems` on the hidden buffer, fill colour, polygons (kind 2/3, 1..99 points, concave is fine), then
-`SetVisibility(new,1)` + `SwitchVisibility(old,new)`. Worker flags for the HUD: `--most-inst 2 --handles 31,32 --canvas 120x72 --show both --container 23`.
+Standard frame sequence: `ImageRemoveAllItems` on back buffer → set fill palette index → submit polygons (kind `2`/`3`, 1..99 vertices, concave polygons supported) → `SetVisibility(new, 1)` + `SwitchVisibility(old, new)`.
+Shipped HUD flags: `--most-inst 2 --handles 31,32 --canvas 120x72 --container 23 --layout split --palette 3,4,3,4,3,4,4 --shift-colour 4 --backs fill --flash-ms 0 --pipeline`.
 
-**Colours are palette indices, not RGB** (fill `0x21B`): 2/4/6 white, 3 dim grey, 5/8/11 orange shades; 0, 1, 7, 9, 10, 12+ draw nothing. No red,
-no yellow. At night the HUD tints white toward orange by itself (BMW's look: white by day, orange at night). **Design frozen 2026-11-18**:
-strip `--palette 3,3,3,3,3,3,4 --shift-colour 4 --backs none --flash-ms 0 --layout big` (grey through the revs, all white at the shift),
-nav dim 3 / ink 4. Don't change colours to "help" daylight: the owner raises the HUD brightness instead.
+**Palette indices (`ImageSetFillColor 0x21B`, 1-byte index, not RGB):** `2`/`4`/`6` = white, `3` = dim grey, `5`/`8`/`11` = orange shades; `0`, `1`, `7`, `9`, `10`, `12+` draw nothing. No red, yellow, or blue exists. At night, the HUD automatically tints white toward orange. See `docs/HUD-DESIGN.md` for full Sport Bar design rules.
 
-## State that outlives our process (the run-5 "shade")
+## Persistent Terminal State
 
-The terminal keeps per-handle state until the **HUD/KOMBI sleeps**. An iDrive knob restart does **not** reset it. [car]
+`HUDTerminal` retains per-handle visibility and pen state until the **HUD/KOMBI enters sleep**. Restarting iDrive with the volume knob does **not** reset it `[verified]`.
 
-| State | Left by | Effect | Undo |
+| Persistent State | Trigger | Symptom | Cleanup |
 |---|---|---|---|
-| `SetVisibility(h,1)` on 33/34, 37, 46 | run 4 grids T1a–c | lies over 31/32: soft, cropped right part ("shade circle") | `--hide 33,34,37,46` (SetVisibility 0) |
-| `SetVisibility(0x1A/0x1B,1)` | nav with `--text-visible` | empty text boxes | `--text-hide`; the worker now hides them on exit |
-| pen: line width 3 + a line colour | `--swatch-line` (T0) | outlines on every later polygon | `--pen-reset` (width 0 accepted) |
-| `SetVisibility(0x17,1)` | every HUD draw | needed; harmless | never sent 0 (untested) |
+| `SetVisibility(h, 1)` on `33`/`34`, `37`, `46` | Diagnostic grid tests | Soft/cropped overlay artifact on top of `31`/`32` | `--hide 33,34,37,46` (`SetVisibility 0`) |
+| `SetVisibility(0x1A/0x1B, 1)` | Text-area tests (`--text-visible`) | Empty or stale text overlay boxes | `--text-hide` (worker also hides on exit) |
+| Pen line width > 0 + line color | Line-swatch tests (`--swatch-line`) | Unexpected outlines on subsequent polygons | `--pen-reset` (line width `0` accepted) |
+| `SetVisibility(0x17, 1)` | Any HUD draw | Required for display; benign | Leave enabled (hiding untested) |
 
-**Rule: a test that makes something visible sets it back before it ends.** When a picture looks wrong after earlier tests, list
-what earlier runs switched on before changing the design (run 5 changed colours twice for nothing).
+**Rule:** Any diagnostic test that enables a handle or changes pen state must revert it before exiting. When visual output looks washed out or clipped after tests, audit residual visible handles before altering layouts or colors.
 
-## Answers that can't be matched
+## Unmatched Error Replies
 
-`ImageSetLineColor 0x218` with colour 0 is refused with **op F `04 00 00`: no handle**, so the sender sees a stray and times out after
-1.5 s ("unanswered call", run 4 T0). Outlines are therefore unproven; draw outlines as thin polygons. [car]
+`ImageSetLineColor` (`0x218`) with palette index `0` returns **OpType `F` (`04 00 00`) with no handle bytes**, so the sender treats the reply as a stray and times out the original call after 1.5 s `[verified]`. Because stroked outlines are unreliable on hardware, draw outlines as thin filled polygons.
 
-## Read a car log, never guess
+## Decoding Worker Logs
+
+Never guess from high-level behavior when raw MOST logs are available:
 
 ```bash
-ssh root@169.254.199.99 'on -f hu-omap sh -c "... ./hud-sportbar-qnx ... --log --seconds 25 2>&1"' > /tmp/x.log
-python3 .claude/skills/hud-terminal/decode_log.py /tmp/x.log      # exit 1 on op F/9, unmatched answers, timeouts, drops
+ssh root@169.254.199.99 'on -f hu-omap sh -c "... ./hud-sportbar-qnx ... --log --seconds 25 2>&1"' > /tmp/hud-session.log
+python3 .claude/skills/hud-terminal/decode_log.py /tmp/hud-session.log   # exits 1 on op F/9, strays, timeouts, or drops
 ```
 
-Golden logs: `.claude/stories/hud-redesign/car-run-*/session-*/` (e.g. `W-pen-reset.log` has the 0x218 op F, `W-hide-33-34-37-46.log`
-is clean). Each new failure mode becomes a replay test in `native/tests/test_hud.c` built from its real lines (example: the
-`start_next` stale-`nflight` test from run 4 T0's "392 timeouts").
+Convert every newly observed protocol edge case or error sequence into a deterministic replay test in `native/tests/test_hud.c` using sanitized log lines.
 
-## Changing things
+## Development Workflow
 
-- New call or new handle: encode it in `hud_proto.c` with a validator, add it to `test_hud.c`, and try it on the car only through the `car-run`
-  skill (one step, one yes, film cluster and HUD).
-- Drawing: change `hud_strip.c` / `hud_cam.c`, then `make -C native test-hud` (it checks every frame fits a batch and every polygon is
-  simple and on the canvas). Look at it with `python3 native/tools/hud_preview.py -o /tmp/p.html`. **Ask the owner before any visual change.**
-- Glyphs (nav, `feature/nav` branch): `native/tools/hud_glyphs_gen.py` regenerates `hud_glyphs.h` from Mapbox's ManeuversStyleKit (v0.40.0).
-- QNX build of the worker: `sh native/docker/qnx.sh build` → `native/out/hud-sportbar-qnx` (prints sha256).
-- Never two HUD senders at once (HudTest, Wayglass, NBT-AAD, a manual test while ExtendedHUD runs): it freezes the HUD, and `slay` by name
-  kills the installed app's copy too. Stop the app (untick Sport Bar and Display Speed Camera Warning) before a manual car test.
+- **Protocol changes:** Encode and validate new calls/handles in `hud_proto.c`, cover them in `native/tests/test_hud.c`, and test on hardware only via skill `car-run` (step-by-step confirmation, filming cluster and HUD).
+- **Drawing changes:** Edit `hud_strip.c` / `hud_cam.c`, verify with `make -C native test-hud` (enforces batch size and canvas bounds), and inspect with `python3 native/tools/hud_preview.py -o /tmp/hud-preview.html`. Confirm visual changes with the user before deploying.
+- **Navigation glyphs (`feature/nav`):** Regenerate `hud_glyphs.h` via `native/tools/hud_glyphs_gen.py` (Mapbox ManeuversStyleKit v0.40.0).
+- **QNX build:** `sh native/docker/qnx.sh build` → `native/out/hud-sportbar-qnx`.
+- **Single-sender rule:** Never run two HUD senders simultaneously (`HudTest`, Wayglass, NBT-AAD, or a manual test while ExtendedHUD is active). Uncheck **Show Sport Bar** and **Show camera warning** in iDrive before any manual worker invocation.

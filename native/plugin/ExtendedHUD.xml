@@ -1,6 +1,8 @@
 <?xml version="1.0" encoding="utf-8"?>
 <!-- Layout copied from the packaged HudTest.xml (property 20/21 = x/y, 9/10 = width/height).
-     src/extended_hud.cpp answers actions 21, 22, 25, 26, 31-35 and 41-43 and writes models 50-52 and 54-59 (58/59: the App information page). The Shift point
+     src/extended_hud.cpp answers actions 21, 22, 25, 26, 31-35 and 41-43 and writes models 50-52 and 54-59 (58/59: the App information page).
+     Main page: status + three submenus, Sport Bar (state 184), Speed Camera Warning (185), App information (103); a page with
+     fixed row positions does not scroll, so 7 rows did not fit (car run 8). The Shift point
      and Warning distance pages copy ShiftDeck's shift-light page (installed on the car): a label with the current value and
      one button per value. Ids 23, 53 and 153 were Navigation (now on the feature/nav branch): never reuse them. -->
 <pluginApps>
@@ -17,6 +19,8 @@
       <raAction id="26" />
       <hmiAction id="27" target="102" />
       <hmiAction id="28" target="103" />
+      <hmiAction id="182" target="184" />
+      <hmiAction id="183" target="185" />
       <raAction id="31" />
       <raAction id="32" />
       <raAction id="33" />
@@ -46,51 +50,71 @@
               <property id="9" value="900" /><property id="10" value="56" />
             </properties>
           </label>
-          <checkbox id="151" action="21" model="51" text="Sport Bar">
+          <button id="186" action="182" text="Sport Bar">
             <properties>
               <property id="20" value="46" /><property id="21" value="125" />
-              <property id="9" value="460" /><property id="10" value="56" />
-            </properties>
-          </checkbox>
-          <checkbox id="152" action="22" model="52" text="Always show Sport Bar">
-            <properties>
-              <property id="20" value="96" /><property id="21" value="183" />
               <property id="9" value="560" /><property id="10" value="56" />
-            </properties>
-          </checkbox>
-          <button id="154" action="24" text="Shift point">
-            <properties>
-              <property id="20" value="96" /><property id="21" value="241" />
-              <property id="9" value="460" /><property id="10" value="56" />
             </properties>
           </button>
-          <checkbox id="155" action="25" model="55" text="Display Speed Camera Warning">
+          <button id="187" action="183" text="Speed Camera Warning">
             <properties>
-              <property id="20" value="46" /><property id="21" value="299" />
-              <property id="9" value="660" /><property id="10" value="56" />
-            </properties>
-          </checkbox>
-          <checkbox id="156" action="26" model="56" text="Orange camera warning">
-            <properties>
-              <property id="20" value="96" /><property id="21" value="357" />
+              <property id="20" value="46" /><property id="21" value="183" />
               <property id="9" value="560" /><property id="10" value="56" />
-            </properties>
-          </checkbox>
-          <button id="157" action="27" text="Warning distance">
-            <properties>
-              <property id="20" value="96" /><property id="21" value="415" />
-              <property id="9" value="460" /><property id="10" value="56" />
             </properties>
           </button>
           <button id="158" action="28" text="App information">
             <properties>
-              <property id="20" value="46" /><property id="21" value="473" />
+              <property id="20" value="46" /><property id="21" value="241" />
               <property id="9" value="460" /><property id="10" value="56" />
             </properties>
           </button>
         </components>
       </hmiState>
-      <hmiState id="101" parentId="100" text="Shift point">
+      <hmiState id="184" parentId="100" text="Sport Bar">
+        <components>
+          <checkbox id="151" action="21" model="51" text="Show Sport Bar">
+            <properties>
+              <property id="20" value="46" /><property id="21" value="60" />
+              <property id="9" value="460" /><property id="10" value="56" />
+            </properties>
+          </checkbox>
+          <checkbox id="152" action="22" model="52" text="Always show Sport Bar">
+            <properties>
+              <property id="20" value="96" /><property id="21" value="118" />
+              <property id="9" value="560" /><property id="10" value="56" />
+            </properties>
+          </checkbox>
+          <button id="154" action="24" text="Shift point">
+            <properties>
+              <property id="20" value="96" /><property id="21" value="176" />
+              <property id="9" value="460" /><property id="10" value="56" />
+            </properties>
+          </button>
+        </components>
+      </hmiState>
+      <hmiState id="185" parentId="100" text="Speed Camera Warning">
+        <components>
+          <checkbox id="155" action="25" model="55" text="Show camera warning">
+            <properties>
+              <property id="20" value="46" /><property id="21" value="60" />
+              <property id="9" value="660" /><property id="10" value="56" />
+            </properties>
+          </checkbox>
+          <checkbox id="156" action="26" model="56" text="Orange camera warning">
+            <properties>
+              <property id="20" value="96" /><property id="21" value="118" />
+              <property id="9" value="560" /><property id="10" value="56" />
+            </properties>
+          </checkbox>
+          <button id="157" action="27" text="Warning distance">
+            <properties>
+              <property id="20" value="96" /><property id="21" value="176" />
+              <property id="9" value="460" /><property id="10" value="56" />
+            </properties>
+          </button>
+        </components>
+      </hmiState>
+      <hmiState id="101" parentId="184" text="Shift point">
         <components>
           <label id="160" model="54" />
           <button id="161" action="31" text="6,200 RPM" />
@@ -100,7 +124,7 @@
           <button id="165" action="35" text="6,600 RPM" />
         </components>
       </hmiState>
-      <hmiState id="102" parentId="100" text="Warning distance">
+      <hmiState id="102" parentId="185" text="Warning distance">
         <components>
           <label id="170" model="57" />
           <button id="171" action="41" text="300 m" />
@@ -110,8 +134,18 @@
       </hmiState>
       <hmiState id="103" parentId="100" text="App information">
         <components>
-          <label id="180" model="58" />
-          <label id="181" model="59" />
+          <label id="180" model="58">
+            <properties>
+              <property id="20" value="46" /><property id="21" value="60" />
+              <property id="9" value="900" /><property id="10" value="56" />
+            </properties>
+          </label>
+          <label id="181" model="59">
+            <properties>
+              <property id="20" value="46" /><property id="21" value="118" />
+              <property id="9" value="900" /><property id="10" value="56" />
+            </properties>
+          </label>
         </components>
       </hmiState>
     </hmiStates>

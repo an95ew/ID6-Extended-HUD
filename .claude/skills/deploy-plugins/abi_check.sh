@@ -1,5 +1,5 @@
 #!/bin/sh
-# Checks that every bmw:: symbol a plugin library needs is defined by THIS car's framework pair, before it goes on the car.
+# Checks that every bmw:: symbol a plugin library needs is defined by the target head unit's framework pair before deployment.
 # An unresolved symbol only fails at dlopen inside HmiMain3D (the app silently never appears). Uses the QNX Docker toolchain.
 #
 #   sh .claude/skills/deploy-plugins/abi_check.sh [LIB.so ...]     # default: every native/out/lib*.so

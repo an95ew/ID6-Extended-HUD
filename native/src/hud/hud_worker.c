@@ -16,7 +16,8 @@
  * --palette b0,b1,y0,y1,r0,r1,ink, --settings FILE, --log (every call and answer to stderr).
  * --draw-live: --cameras PATH (cameras.txt, tools/cameras_build.py) with the GPS the plugin sends (geo_frame) gives the
  * speed-camera alert; --scene cam makes --dump and --draw-parked show a scripted pass instead (whole picture, then with the bar).
- * --layout big (strip and gear over the whole canvas), --layout split (gear left, RPM right under the strip), --flash-ms N (0 = steady), --shift-hold MS (pull trace),
+ * The split layout over the whole --canvas (strip on top, gear left and RPM right under it; --layout split is accepted, the
+ * only one), --flash-ms N (0 = steady), --shift-hold MS (pull trace),
  * --shift-colour N (whole bar in N from the shift point), --backs fill|none|outline (unlit fields),
  * Undoing state an earlier run left in the terminal (it outlives us until the HUD sleeps): --hide H,H,... (SetVisibility 0,
  * e.g. 33,34,37,46 after grids, 26,27 for the 6WB text areas), --pen-reset (line colour 0 is refused with op F, width 0
@@ -63,7 +64,7 @@ static struct {
     int cam;   /* --scene cam */
     int red;   /* --red N: the red fill index for a test; 0 = the settings' red= */
     int rtt, seconds, udp_port, first, last, log, most_inst, container;
-    int swatch_n, swatch_pages, swatch_line, big, trace_set, shift_hold, pen_reset, nhide;
+    int swatch_n, swatch_pages, swatch_line, trace_set, shift_hold, pen_reset, nhide;
     int in_flight, merge, gear_every, pipeline;   /* 0: the defaults (HUD_IN_FLIGHT, the layout's merging, the collector's) */
     uint16_t hide[8];
     const char *show;   /* how --grid/--swatches bring the image up: switch, set or both */
@@ -110,7 +111,7 @@ static int usage(void)
           " [--trace pull|idle|sweep] [--rtt MS] [--seconds S] [--canvas WxH] [--handles A,B]"
           " [--scene rpm|cam] [--static-handle N] [--palette b0,b1,y0,y1,r0,r1,ink] [--settings FILE] [--cameras PATH]"
           " [--collector PATH --host IP] [--show switch|set|both] [--container N] [--log]"
-          " [--swatch-n N --swatch-pages P --swatch-line] [--layout big|split] [--flash-ms N] [--shift-hold MS]"
+          " [--swatch-n N --swatch-pages P --swatch-line] [--layout split] [--flash-ms N] [--shift-hold MS]"
           " [--shift-colour N] [--backs fill|none|outline] [--pen-reset] [--hide H,H,...]"
           " [--in-flight N] [--pipeline] [--merge PTS] [--gear-every N] [--red N]\n", stderr);
     return 2;
@@ -121,7 +122,7 @@ static int parse_args(int argc, char **argv)
     int i, v[7];
     hud_profile_b58(&o.prof);
     hud_palette_default(&o.pal);
-    hud_geom_default(&o.geom);
+    hud_geom_split(&o.geom, 120, 72);
     hud_handles_default(&o.hh);
     o.show = "switch";
     o.trace = "pull";
@@ -161,7 +162,7 @@ static int parse_args(int argc, char **argv)
         else if (!strcmp(a, "--trace")) { o.trace = n; o.trace_set = 1; i++; }
         else if (!strcmp(a, "--swatch-n") && !parse_list(n, v, 1) && v[0] >= 1 && v[0] <= 8) { o.swatch_n = v[0]; i++; }
         else if (!strcmp(a, "--swatch-pages") && !parse_list(n, v, 1) && v[0] >= 1 && v[0] <= 32) { o.swatch_pages = v[0]; i++; }
-        else if (!strcmp(a, "--layout") && (!strcmp(n, "big") || !strcmp(n, "split"))) { o.big = !strcmp(n, "big") ? 1 : 2; i++; }
+        else if (!strcmp(a, "--layout") && !strcmp(n, "split")) i++;   /* the only layout; the plugin still passes it */
         else if (!strcmp(a, "--shift-colour") && !parse_list(n, v, 1) && v[0] <= 255) { o.pal.shift_on = (uint8_t)v[0]; i++; }
         else if (!strcmp(a, "--backs") && (!strcmp(n, "fill") || !strcmp(n, "none") || !strcmp(n, "outline"))) {
             o.pal.backs = !strcmp(n, "none") ? HUD_BACKS_NONE : !strcmp(n, "outline") ? HUD_BACKS_OUTLINE : HUD_BACKS_FILL; i++;
@@ -191,7 +192,7 @@ static int parse_args(int argc, char **argv)
         else if (!strcmp(a, "--collector")) { o.collector = n; i++; }
         else if (!strcmp(a, "--host")) { o.host = n; i++; }
         else if (!strcmp(a, "--canvas") && sscanf(n, "%dx%d", &v[0], &v[1]) == 2 && v[0] > 0 && v[1] > 0 &&
-                 v[0] <= 4096 && v[1] <= 4096) { hud_geom_for_canvas(&o.geom, v[0], v[1]); i++; }
+                 v[0] <= 4096 && v[1] <= 4096) { hud_geom_split(&o.geom, v[0], v[1]); i++; }
         else if (!strcmp(a, "--handles") && !parse_list(n, v, 2) && v[0] >= 1 && v[0] <= 255 && v[1] >= 1 &&
                  v[1] <= 255) { o.hh.buf[0] = (uint16_t)v[0]; o.hh.buf[1] = (uint16_t)v[1]; i++; }
         else if (!strcmp(a, "--palette") && !parse_list(n, v, 7)) {
@@ -203,8 +204,6 @@ static int parse_args(int argc, char **argv)
     }
     if (o.mode == M_NONE || (o.mode == M_LIVE && !o.udp_port) || (o.collector && !o.host)) return usage();
     if (o.swatch_n && o.first + o.swatch_n * o.swatch_pages > 256) return usage();
-    if (o.big == 1) hud_geom_big(&o.geom, o.geom.canvas_w, o.geom.canvas_h);
-    if (o.big == 2) hud_geom_split(&o.geom, o.geom.canvas_w, o.geom.canvas_h);
     if (o.merge) o.geom.merge_pts = o.merge < 0 ? 0 : o.merge;
     return 0;
 }

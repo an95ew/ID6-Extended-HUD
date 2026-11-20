@@ -129,7 +129,7 @@ class CamerasBuildTest(unittest.TestCase):
             data_date(ns(date="19.11.2026", html="x.html"))
         shipped = open(os.path.join(os.path.dirname(__file__), "..", "native", "plugin", "cameras.txt"), encoding="utf-8")
         with shipped:
-            self.assertRegex(shipped.read(4096), r"\n# date \d{4}-\d{2}-\d{2}\n")
+            self.assertRegex(shipped.read(4096), r"\n# iso [A-Z]{2}\n# date \d{4}-\d{2}-\d{2}\n")
 
     def test_countries(self):
         # Sources are grouped per country (cameras_sources.json); only the chosen one is fetched.

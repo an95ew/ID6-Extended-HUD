@@ -9,7 +9,7 @@
 #include <stddef.h>
 
 /* The release (App information page). Bump both for every release; the camera list has its own date (cameras.txt). */
-#define HUD_APP_VERSION "1.0.0"
+#define HUD_APP_VERSION "0.0.1"
 #define HUD_APP_RELEASED "2026-11-20"
 
 #define HUD_APP_DIR "/var/opt/hmi/data/ID5/Plugins/ExtendedHUD"
@@ -49,12 +49,14 @@ const char *hud_app_conflict(const char *plugins_dir);
 /* The worker's command line, the split Sport Bar (approved 2026-11-18). argv points into buf. Returns argc, or
    -1 if it does not fit. */
 int hud_app_worker_argv(const char *dir, const char *gateway, char *buf, size_t cap, const char **argv, int max);
-/* The App information page: "Version 1.0.0, released 2026-11-20" and, from dir/cameras.txt (its "# country NAME" and
-   "# date YYYY-MM-DD" lines, written by tools/cameras_build.py and updated without a release: skill update-speedcam-db),
-   "Speed cameras: Ukraine, 426, data from 2026-11-19". A missing file, country or date says so. */
+/* The App information page: "Version 0.0.1, released 2026-11-20" and, from dir/cameras.txt (its "# iso CC" (else
+   "# country NAME") and "# date YYYY-MM-DD" lines, written by tools/cameras_build.py and updated without a release: skill
+   update-speedcam-db), "Speed cameras: UA-426-2026-11-19" (one short line: the page cuts longer text, car run 8). A missing
+   file says so, a missing country or date shows "?". */
 typedef struct {
     int count;                  /* camera lines */
     char country[32];           /* "" when the file names none */
+    char iso[3];                /* "UA", "" when none */
     char date[11];              /* YYYY-MM-DD, "" when none */
 } hud_cams_meta;
 void hud_app_version_label(char *out, size_t cap);

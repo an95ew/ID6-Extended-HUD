@@ -466,7 +466,8 @@ def main():
     dirs, stats = directions(rows, elements, country.get("traffic") == "left")
     with open(a.out, "w", encoding="utf-8") as f:
         f.write("# ExtendedHUD speed cameras: lat lon limit dir (hud_cam.h). Source: %s\n" % source)
-        f.write("# country %s\n" % country["name"])   # the App information page shows the country and the date
+        f.write("# country %s\n" % country["name"])
+        f.write("# iso %s\n" % country["iso"])        # the App information page shows "UA-426-2026-11-19"
         f.write("# date %s\n" % date)
         f.write("# %d fixed cameras; dir from OpenStreetMap: %s\n" % (len(rows), ", ".join("%s %d" % kv for kv in sorted(stats.items()))))
         for r, d in zip(rows, dirs):

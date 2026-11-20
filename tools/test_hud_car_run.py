@@ -83,9 +83,8 @@ class CarRunTest(unittest.TestCase):
         self.assertNotIn("--container", worker_args(STEPS["R1"], {"container": "23"}))
         # Run 3 steps on the HUD pair: the container goes to the bars and the draws, the palette to the draws only.
         state = {"inst": "2", "handles": "31,32", "canvas": "120x72", "container": "23", "palette": "3,4,3,5,3,8,4"}
-        for k in ("S0f", "S0l", "S1"):
+        for k in ("S0f", "S0l", "W1"):
             self.assertEqual(worker_args(STEPS[k], state).count("--container"), 1, k)
-        self.assertIn("--palette", worker_args(STEPS["S1"], state))
         self.assertNotIn("--palette", worker_args(STEPS["S0f"], state))
         # Run 3, S0f as logged: the worker's alarm covered one page, not eight, and killed it mid-way (rc 142).
         log = ("[hud] 82/02 up, host 0101\n[hud] page 5 at 34.3 s: fill colours 32..39 left to right, 2273 ms, 0 errors,"
@@ -97,9 +96,9 @@ class CarRunTest(unittest.TestCase):
         t1 = worker_args(STEPS["T1a"], state)
         self.assertEqual(t1.count("--handles"), 1)
         self.assertEqual(t1[t1.index("--handles") + 1], "33,34")
-        t2 = worker_args(STEPS["T2"], state)
-        self.assertEqual(t2[t2.index("--palette") + 1], "3,3,3,3,3,3,4")
-        self.assertEqual(t2.count("--palette"), 1)
+        w1 = worker_args(STEPS["W1"], state)
+        self.assertEqual(w1[w1.index("--palette") + 1], "3,4,3,4,3,4,4")
+        self.assertEqual(w1.count("--palette"), 1)
         self.assertEqual(worker_args(STEPS["T1b"], state).count("--container"), 1)
         for k in ("S0f", "S0l", "T0"):
             a = STEPS[k].args

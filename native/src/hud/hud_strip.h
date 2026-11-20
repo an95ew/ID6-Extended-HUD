@@ -25,7 +25,8 @@ enum { HUD_BACKS_FILL, HUD_BACKS_NONE, HUD_BACKS_OUTLINE };
    cam (0 = alert, else ink): the camera warning's colour, 5 (orange) with settings cam_orange=1 (owner 2026-11-20). */
 typedef struct { uint8_t base_off, base_on, yellow_off, yellow_on, red_off, red_on, ink, shift_on; int backs; uint8_t alert, cam; } hud_palette;
 
-/* Layout in HUD canvas units. Defaults come from the design gallery's 480x180 canvas. */
+/* Layout in HUD canvas units: the split layout is the only one (the gallery's scaled 480x180 and run 3's big layout
+   were removed 2026-11-20). */
 typedef struct {
     int canvas_w, canvas_h;
     int x, y, w, h;                  /* the strip */
@@ -33,7 +34,6 @@ typedef struct {
     int gear_cx, gear_top, gear_h;   /* 7-segment gear digit; gear_h 0 hides it */
     int rise;                        /* red fields stand this much taller, yellow half: the HUD has no red (run 3) */
     int rpm_x1, rpm_h;               /* RPM readout, right-aligned at rpm_x1, bottom on the gear's; rpm_h 0 hides it */
-    int solid_digits;                /* 1: each digit is one polygon (holes as keyholes), 0: one polygon per segment */
     int merge_pts;                   /* >0: outlines of one colour that share a bottom line go out as one polygon of at
                                         most this many points (a call costs ~260 ms / window on the car); 0: one each */
 } hud_geom;
@@ -64,14 +64,9 @@ void hud_profile_for_shift(hud_profile *p, int shift);
 void hud_palette_default(hud_palette *p);
 /* The camera's colour: cam, else alert, else ink. */
 uint8_t hud_cam_ink(const hud_palette *p);
-void hud_geom_default(hud_geom *g);
-/* Scales the default layout to a canvas reported by ImageGetSize. */
-void hud_geom_for_canvas(hud_geom *g, int canvas_w, int canvas_h);
-/* The whole canvas: the strip across the top, the gear digit below it. For the small HUD image (82/02 31/32 is
-   120x72), where the scaled default uses only a sixth of it. */
-void hud_geom_big(hud_geom *g, int canvas_w, int canvas_h);
-/* The split layout (2026-11-18): the strip as in the big one, under it the gear on the left and the RPM on the right,
-   every digit one polygon, merged (merge_pts 99): a frame is ~7 calls whatever the revs. */
+/* The split layout (2026-11-18), over the whole canvas (82/02 31/32 is 120x72): the strip across the top, under it the
+   gear on the left and the RPM on the right, every digit one polygon (holes as keyholes), merged (merge_pts 99): a
+   frame is ~7 calls whatever the revs. */
 void hud_geom_split(hud_geom *g, int canvas_w, int canvas_h);
 void hud_handles_default(hud_handles *h);
 /* The RPM the readout shows: to the nearest 50, as the car draws one frame per ~2 s. */
