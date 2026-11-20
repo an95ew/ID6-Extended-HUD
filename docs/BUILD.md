@@ -22,7 +22,7 @@ If you have QNX SDP 6.5 installed natively on Linux, set `QNX_HOST`, `QNX_TARGET
 
 ## Framework-free worker build
 
-`hud-sportbar-qnx`, `shift-deck-qnx`, and `librghook.so` link no private BMW libraries (DSI is loaded at run time with `dlopen`):
+`hud-sportbar-qnx` and `shift-deck-qnx` link no private BMW libraries (DSI is loaded at run time with `dlopen`):
 
 ```sh
 sh native/docker/qnx.sh build
@@ -31,7 +31,6 @@ sh native/docker/qnx.sh build
 Outputs in `native/out/` (git-ignored):
 - `native/out/hud-sportbar-qnx` — HUDTerminal MOST worker
 - `native/out/shift-deck-qnx` — read-only OBD `01 0C`/`01 0D` collector (HSFZ + [MOST fallback](MOST.md))
-- `native/out/librghook.so` — CarPlay route-guidance hook (built only, not installed by default)
 
 ## Full plugin build and standalone package
 
@@ -54,8 +53,18 @@ sh native/docker/qnx.sh package
 ```
 
 This runs `native/build.sh` and `native/package.sh`, verifying every binary is an ARM ELF32 file and writing:
-- `native/out/ExtendedHUD/` — ready-to-deploy plugin folder (`ExtendedHUD.manifest`, `ExtendedHUD.xml`, `libExtendedHUD.so`, `hud-sportbar-qnx`, `shift-deck-qnx`, `gateway-ip.txt`)
+- `native/out/ExtendedHUD/` — ready-to-deploy plugin folder (`ExtendedHUD.manifest`, `ExtendedHUD.xml`, `libExtendedHUD.so`, `hud-sportbar-qnx`, `shift-deck-qnx`, `gateway-ip.txt`, `cds.txt`, `cameras.txt`)
 - `native/out/extended-hud.zip` — archive with `ExtendedHUD/`, `SHA256SUMS`, `LICENSE`, and `README.md`
+
+Check the library against the car's frameworks before installing. Either check works: the QNX one, or the pure-Python one (no SDK needed):
+
+```sh
+sh .claude/skills/deploy-plugins/abi_check.sh out/libExtendedHUD.so
+python3 tools/abi_check.py native/out/libExtendedHUD.so native/frameworks/libAppFramework.A.so native/frameworks/libCoreFramework.A.so
+```
+
+Release: bump `HUD_APP_VERSION` and `HUD_APP_RELEASED` in `native/src/hud/hud_app.h` (the iDrive App information page shows them).
+The camera list is not tied to a release: `tools/cameras_build.py` (skill `update-speedcam-db`) rebuilds `cameras.txt` alone.
 
 Where SDK linker versions differ, set `NBTEVO_RUNTIME_DIR` to a private directory containing matching `libm.so.2`, `libsocket.so.3`, and `libstdc++.so.6`, or `NBTEVO_FRAMEWORKS_DIR` to point to an alternate frameworks folder.
 

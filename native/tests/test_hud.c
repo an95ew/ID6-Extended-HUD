@@ -715,7 +715,7 @@ static void test_app(void) {
         assert((f = fopen("plugin/cameras.txt", "r")));
         while (fgets(line, sizeof line, f)) hud_app_cameras_line(&m, line);
         fclose(f);
-        assert(m.count > 400 && strlen(m.date) == 10 && !strcmp(m.country, "Ukraine"));
+        assert(m.count > 0 && strlen(m.date) == 10 && m.country[0]);   /* any country (update-speedcam-db) */
     }
     argc = hud_app_worker_argv(HUD_APP_DIR, "169.254.21.3", buf, sizeof buf, argv, HUD_APP_MAX_ARGS);
     assert(argc > 10 && argv[argc] == NULL);

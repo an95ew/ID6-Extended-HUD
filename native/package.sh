@@ -19,6 +19,7 @@ PLUGIN = NATIVE / "plugin"
 LICENSE = NATIVE.parent / "LICENSE"
 THIRD_PARTY = NATIVE.parent / "third-party"
 IDRIVE7_LICENSE = THIRD_PARTY / "idrive7-apps-LICENSE"
+ABI_CHECK = NATIVE.parent / "tools" / "abi_check.py"   # INSTALL.md step 3, no QNX SDK needed
 STAGE = OUT / "ExtendedHUD"
 ZIP_PATH = OUT / "extended-hud.zip"
 
@@ -45,7 +46,7 @@ for name, types in REQUIRED_BINS.items():
 for name in REQUIRED_CONFIG:
     if not (PLUGIN / name).is_file():
         sys.exit(f"Missing plugin file: {PLUGIN / name}")
-for extra in (LICENSE, IDRIVE7_LICENSE):
+for extra in (LICENSE, IDRIVE7_LICENSE, ABI_CHECK):
     if not extra.is_file():
         sys.exit(f"Missing license/notice file: {extra}")
 
@@ -76,7 +77,8 @@ readme_text = (
     "Install ExtendedHUD/ into /var/opt/hmi/data/ID5/Plugins/ExtendedHUD/ on the HMI node,\n"
     "mark hud-sportbar-qnx and shift-deck-qnx executable (chmod 755), verify every uploaded\n"
     "file by hash readback, and restart iDrive. Do not install alongside HudTest.\n\n"
-    "Install guide: INSTALL.md in the source repository.\n\n"
+    "Install guide: INSTALL.md in https://github.com/an95ew/ID6-Extended-HUD. Check the library against your car's\n"
+    "frameworks first: python3 abi_check.py ExtendedHUD/libExtendedHUD.so libAppFramework.A.so libCoreFramework.A.so\n\n"
     "Licensing: MIT (LICENSE, LICENSE-idrive7-apps.txt).\n"
 )
 
@@ -99,6 +101,7 @@ with zipfile.ZipFile(ZIP_PATH, "w") as zf:
     write_zip_bytes(zf, "LICENSE", LICENSE.read_bytes(), 0o644)
     write_zip_bytes(zf, "LICENSE-idrive7-apps.txt", IDRIVE7_LICENSE.read_bytes(), 0o644)
     write_zip_bytes(zf, "README.md", readme_text.encode("utf-8"), 0o644)
+    write_zip_bytes(zf, "abi_check.py", ABI_CHECK.read_bytes(), 0o755)
 
 # Read back and verify every entry in SHA256SUMS.
 with zipfile.ZipFile(ZIP_PATH, "r") as zf:

@@ -20,7 +20,7 @@ subagents for this. Every step needs the owner's eyes and a yes, and a handoff l
 3. Open the shared SSH master (car-ssh.md). Check the host key.
 
 ## Car state
-- Default is **parked, ignition on, engine off**. Probes, grids, swatches, nav routes and `--draw-parked` need nothing more.
+- Default is **parked, ignition on, engine off**. Probes, grids, swatches and `--draw-parked` need nothing more.
 - Say explicitly **"start the engine now"** and why, only when a step needs it: `--draw-live` (real RPM and speed),
   confirming a result with the engine running, or recharging after a battery or energy-saving warning. Say "switch it off" afterwards.
   Engine running means parked, P, handbrake on, outdoors.
@@ -58,9 +58,9 @@ subagents for this. Every step needs the owner's eyes and a yes, and a handoff l
   an iDrive restart until the HUD sleeps. Run 5 chased a "shade" through two colour redesigns before finding the T1 grids' leftovers.
   End every grid or text step with `--hide …` / `--text-hide`.
 - **The design is frozen** (memory `hud-design-frozen`). Don't change the look to fix a symptom; find the cause first.
-- **ExtendedHUD is installed:** before any manual worker run, the owner unticks Sport Bar and Navigation in the menu, or you would be a second
+- **ExtendedHUD is installed:** before any manual worker run, the owner unticks Sport Bar and Display Speed Camera Warning in the menu, or you would be a second
   HUD sender (and `slay` by name kills the app's copy). See the extendedhud skill.
 - **SSH drops** when the laptop's link-local address changes or iDrive restarts: reopen the master with keepalive (car-ssh.md) and check the
   unit before retrying. Nothing ran.
 - Other skills: hud-terminal (protocol), extendedhud (our app), deploy-plugins (writes to Plugins), dme-reads (engine data),
-  carplay-route-guidance (CarPlay turns: on hold).
+  update-speedcam-db (the camera list). CarPlay turns: `feature/nav` branch.

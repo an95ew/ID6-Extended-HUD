@@ -15,7 +15,7 @@ tables; this skill shows how to use them.
 | Call encoding + validators | `src/hud/hud_proto.[ch]` | one function per call (`hud_polygon`, `hud_set_visibility`, …); `hud_call_valid` = the packaged worker's limits |
 | Batches, 3 in flight, answers | `src/hud/hud_sender.[ch]` | matches answers by (fkt, first u16 = handle); 1500 ms per-call timeout drops the rest of the frame |
 | MOST/DSI link | `src/hud/hud_most.c`, `src/most/` | `DSYSMOSTServer` via `libsys_dsi_colibry…so`, `dlopen`ed at run time |
-| What to draw | `hud_strip.c` (Sport Bar), `hud_nav.c` (+ generated `hud_glyphs.h`), `hud_text.c`, `hud_scene.c` | pure functions, host-tested |
+| What to draw | `hud_strip.c` (Sport Bar), `hud_cam.c` (speed-camera warning), `hud_scene.c`; the nav scene (`hud_nav.c`, `hud_text.c`, glyphs) is on the `feature/nav` branch | pure functions, host-tested |
 | The process | `src/hud/hud_worker.c` → `hud-sportbar-qnx` | probes, grids, swatches, parked/live drawing; `--log` prints every tx/rx |
 | Log reader | `.claude/skills/hud-terminal/decode_log.py` | per fkt: sent, answers by op, answers without a sent handle |
 
@@ -84,9 +84,9 @@ is clean). Each new failure mode becomes a replay test in `native/tests/test_hud
 
 - New call or new handle: encode it in `hud_proto.c` with a validator, add it to `test_hud.c`, and try it on the car only through the `car-run`
   skill (one step, one yes, film cluster and HUD).
-- Drawing: change `hud_strip.c` / `hud_nav.c`, then `make -C native test-hud` (it checks every frame fits a batch and every polygon is
+- Drawing: change `hud_strip.c` / `hud_cam.c`, then `make -C native test-hud` (it checks every frame fits a batch and every polygon is
   simple and on the canvas). Look at it with `python3 native/tools/hud_preview.py -o /tmp/p.html`. **Ask the owner before any visual change.**
-- Glyphs: `python3 native/tools/hud_glyphs_gen.py` regenerates `native/src/hud/hud_glyphs.h` from Mapbox's ManeuversStyleKit (v0.40.0).
+- Glyphs (nav, `feature/nav` branch): `native/tools/hud_glyphs_gen.py` regenerates `hud_glyphs.h` from Mapbox's ManeuversStyleKit (v0.40.0).
 - QNX build of the worker: `sh native/docker/qnx.sh build` → `native/out/hud-sportbar-qnx` (prints sha256).
 - Never two HUD senders at once (HudTest, Wayglass, NBT-AAD, a manual test while ExtendedHUD runs): it freezes the HUD, and `slay` by name
-  kills the installed app's copy too. Stop the app (untick Sport Bar and Navigation) before a manual car test.
+  kills the installed app's copy too. Stop the app (untick Sport Bar and Display Speed Camera Warning) before a manual car test.
