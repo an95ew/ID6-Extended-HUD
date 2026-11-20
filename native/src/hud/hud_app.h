@@ -8,6 +8,10 @@
 
 #include <stddef.h>
 
+/* The release (App information page). Bump both for every release; the camera list has its own date (cameras.txt). */
+#define HUD_APP_VERSION "1.0.0"
+#define HUD_APP_RELEASED "2026-11-20"
+
 #define HUD_APP_DIR "/var/opt/hmi/data/ID5/Plugins/ExtendedHUD"
 #define HUD_APP_PLUGINS "/var/opt/hmi/data/ID5/Plugins"
 enum { HUD_APP_UDP_PORT = 42873, HUD_APP_MAX_ARGS = 40 };
@@ -45,6 +49,18 @@ const char *hud_app_conflict(const char *plugins_dir);
 /* The worker's command line, the split Sport Bar (approved 2026-11-18). argv points into buf. Returns argc, or
    -1 if it does not fit. */
 int hud_app_worker_argv(const char *dir, const char *gateway, char *buf, size_t cap, const char **argv, int max);
+/* The App information page: "Version 1.0.0, released 2026-11-20" and, from dir/cameras.txt (its "# country NAME" and
+   "# date YYYY-MM-DD" lines, written by tools/cameras_build.py and updated without a release: skill update-speedcam-db),
+   "Speed cameras: Ukraine, 426, data from 2026-11-19". A missing file, country or date says so. */
+typedef struct {
+    int count;                  /* camera lines */
+    char country[32];           /* "" when the file names none */
+    char date[11];              /* YYYY-MM-DD, "" when none */
+} hud_cams_meta;
+void hud_app_version_label(char *out, size_t cap);
+void hud_app_cameras_label(const char *dir, char *out, size_t cap);
+/* One cameras.txt line (no newline needed) into m; start from a zeroed m. */
+void hud_app_cameras_line(hud_cams_meta *m, const char *line);
 /* The menu's status line. */
 void hud_app_status(const hud_settings *s, int running, const char *conflict, int restarts, char *out, size_t cap);
 

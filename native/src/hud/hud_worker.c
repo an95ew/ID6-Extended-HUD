@@ -404,14 +404,22 @@ static void read_settings(hud_settings *st);
 
 static int load_cameras(hud_cam *cams, int max)
 {
-    static char buf[64 * 1024];
+    char *buf;
     FILE *f;
+    long size;
     size_t n;
     int c;
     if (!o.cameras || !(f = fopen(o.cameras, "r"))) return 0;
-    n = fread(buf, 1, sizeof buf, f);
+    /* any size: a country's list (tools/cameras_sources.json) may run to a few hundred KB */
+    if (fseek(f, 0, SEEK_END) != 0 || (size = ftell(f)) < 0 || fseek(f, 0, SEEK_SET) != 0 ||
+        !(buf = malloc((size_t)size + 1))) {
+        fclose(f);
+        return 0;
+    }
+    n = fread(buf, 1, (size_t)size, f);
     fclose(f);
     c = hud_cams_parse(buf, n, cams, max);
+    free(buf);
     fprintf(stderr, "[hud] cameras: %d from %s\n", c, o.cameras);
     return c;
 }

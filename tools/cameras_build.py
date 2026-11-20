@@ -10,10 +10,17 @@ so directions come from OpenStreetMap elements near each camera (--osm: ways + h
   1. Explicit OSM highway=speed_camera nodes (1-to-1 within 25 m) tagged direction=forward|backward|both (113/113 forward
      on one-way roads; both -> -1). Numeric degrees are skipped (7/9 opposite on one-way roads: lens azimuth vs travel).
   2. One-way carriageway (divided road) within 30 m: the camera watches that way.
-  3. Two-way road within 30 m: right-hand traffic, so pairs (<150 m, anti-parallel safe) split by side and singles
-     at least SIDE_M off the centre line take their side; otherwise -1.
+  3. Two-way road within 30 m: a camera serves the lane next to it (right-hand traffic; mirrored for a country with
+     "traffic": "left"), so pairs (<150 m, anti-parallel safe) split by side and singles at least SIDE_M off the centre
+     line take their side; otherwise -1.
+
+Countries: tools/cameras_sources.json groups the sources per country; --country KEY fetches only that one and writes
+"# country" and "# date" into cameras.txt (the iDrive App information page shows both).
+
+    python3 tools/cameras_build.py --country UnitedKingdom --fetch-osm data/gb-osm.json --out cameras.txt
 """
 import argparse
+import datetime
 import html
 import json
 import math
@@ -24,7 +31,6 @@ import time
 import urllib.parse
 import urllib.request
 
-URL = "https://patrolpolice.gov.ua/automatic_fixation/informatsiya-pro-vstanovleni-kaf/"
 PAIR_M = 150.0
 NEAR_M = 30.0
 SIDE_M = 2.5
@@ -138,14 +144,43 @@ def _node_way_bearing(nd, ways):
     return s[1] if s and s[0] <= 20.0 else None
 
 
-def directions(rows, elements):
+class WayIndex:
+    """Drivable ways bucketed on a ~1 km grid, so a country's list (thousands of cameras) needs no scan of every road."""
+    CELL = 0.01
+
+    def __init__(self, ways):
+        self.cells = {}
+        for w in ways:
+            seen = set()
+            for p in w.get("geometry") or []:
+                key = (int(p["lat"] // self.CELL), int(p["lon"] // self.CELL))
+                if key not in seen:
+                    seen.add(key)
+                    self.cells.setdefault(key, []).append(w)
+
+    def around(self, lat, lon):
+        """Ways with a node in this cell or the 8 next to it (a segment longer than ~1 km may be missed: rare)."""
+        ci, cj = int(lat // self.CELL), int(lon // self.CELL)
+        out, ids = [], set()
+        for di in (-1, 0, 1):
+            for dj in (-1, 0, 1):
+                for w in self.cells.get((ci + di, cj + dj), ()):
+                    if id(w) not in ids:
+                        ids.add(id(w))
+                        out.append(w)
+        return out
+
+
+def directions(rows, elements, left_hand=False):
     out = [-1] * len(rows)
     if not elements:
         return out, {"no osm": len(rows)}
-    ways = [e for e in elements if e.get("type", "way") == "way"]
+    index = WayIndex([e for e in elements if e.get("type", "way") == "way"])
     cam_nodes = [e for e in elements if e.get("type") == "node" and e.get("tags", {}).get("highway") == "speed_camera"]
     reasons = [None] * len(rows)
-    near = [nearest_segment(r, ways) for r in rows]
+    near = [nearest_segment(r, index.around(r["lat"], r["lon"])) for r in rows]
+    if left_hand:   # a camera serves the lane next to it: on the left in left-hand traffic, so mirror the side
+        near = [(n[0], n[1], -n[2], n[3]) if n else n for n in near]
 
     # Tier 1: 1-to-1 greedy matching to OSM highway=speed_camera nodes with explicit forward/backward/both (<= OSM_CAM_M).
     cand_pairs = []
@@ -173,7 +208,7 @@ def directions(rows, elements):
             if dtag == "both":
                 reasons[i] = "osm speed_camera: both ways"
                 continue
-            br = _node_way_bearing(nd, ways)
+            br = _node_way_bearing(nd, index.around(nd["lat"], nd["lon"]))
             if br is not None:
                 out[i] = round(br if dtag == "forward" else (br + 180) % 360) % 360
                 reasons[i] = "osm speed_camera (%s)" % dtag
@@ -306,36 +341,139 @@ def fetch_osm(rows, out_path):
     return payload["elements"]
 
 
+SOURCES = os.path.join(os.path.dirname(os.path.abspath(__file__)), "cameras_sources.json")
+
+
+def load_country(key):
+    """The country's entry in cameras_sources.json (keys like "Ukraine", "UnitedKingdom")."""
+    with open(SOURCES, encoding="utf-8") as f:
+        src = json.load(f)
+    if key not in src or key.startswith("_"):
+        raise SystemExit("unknown country %r; known: %s" % (key, ", ".join(k for k in src if not k.startswith("_"))))
+    return src[key]
+
+
+def parse_limit(v):
+    """OSM maxspeed "50", "30 mph", "RU:urban" -> the number as signed, 0 when there is none."""
+    m = re.match(r"\s*(\d{1,3})\b", v or "")
+    return int(m.group(1)) if m else 0
+
+
+def rows_from_osm(elements):
+    """osm_country: every highway=speed_camera node is a camera; its limit is maxspeed, else the nearest way's (30 m)."""
+    index = WayIndex([e for e in elements if e.get("type") == "way"])
+    rows = []
+    for e in elements:
+        tags = e.get("tags", {})
+        if e.get("type") != "node" or tags.get("highway") != "speed_camera":
+            continue
+        limit = parse_limit(tags.get("maxspeed"))
+        if not limit:
+            best = None
+            for w in index.around(e["lat"], e["lon"]):
+                lim = parse_limit(w.get("tags", {}).get("maxspeed"))
+                if not lim:
+                    continue
+                s = nearest_segment(e, [w])
+                if s and s[0] <= NEAR_M and (best is None or s[0] < best[0]):
+                    best = (s[0], lim)
+            limit = best[1] if best else 0
+        rows.append({"lat": e["lat"], "lon": e["lon"], "limit": limit, "place": tags.get("name", ""), "region": ""})
+    rows.sort(key=lambda r: (r["lat"], r["lon"]))   # a stable order: the same data gives the same file
+    return rows
+
+
+def fetch_osm_country(iso, out_path):
+    """osm_country: one Overpass query for the country's cameras and the drivable ways within 45 m of them."""
+    hw_re = "^(" + "|".join(sorted(DRIVABLE_HIGHWAYS)) + ")$"
+    q = ('[out:json][timeout:900];area["ISO3166-1"="%s"][admin_level=2]->.a;'
+         'node(area.a)["highway"="speed_camera"]->.c;.c out body;way(around.c:45)["highway"~"%s"];out geom tags;') % (iso, hw_re)
+    last = None
+    for url in OVERPASS_ENDPOINTS:
+        try:
+            r = urllib.request.Request(url, data=urllib.parse.urlencode({"data": q}).encode(),
+                                       headers={"User-Agent": UA, "Accept": "application/json"})
+            with urllib.request.urlopen(r, timeout=960) as resp:
+                elements = json.loads(resp.read().decode("utf-8")).get("elements", [])
+            break
+        except Exception as e:   # the next endpoint
+            last = e
+    else:
+        raise SystemExit("Overpass failed on every endpoint: %s" % last)
+    os.makedirs(os.path.dirname(os.path.abspath(out_path)), exist_ok=True)
+    with open(out_path, "w", encoding="utf-8") as f:
+        json.dump({"source": url, "elements": elements}, f)
+    return elements
+
+
+def data_date(a):
+    """The date the list was taken: --date, today for a fetch, the file name's YYYY-MM-DD, or the file's mtime."""
+    if a.date:
+        if not re.fullmatch(r"\d{4}-\d{2}-\d{2}", a.date):
+            raise SystemExit("--date wants YYYY-MM-DD")
+        return a.date
+    if a.fetch or (getattr(a, "fetch_osm", None) and not a.html):
+        return datetime.date.today().isoformat()
+    src = a.html or getattr(a, "osm", None)
+    m = re.search(r"(\d{4}-\d{2}-\d{2})", os.path.basename(src))
+    if m:
+        return m.group(1)
+    return datetime.date.fromtimestamp(os.path.getmtime(src)).isoformat()
+
+
 def main():
     ap = argparse.ArgumentParser(description=__doc__, formatter_class=argparse.RawDescriptionHelpFormatter)
-    ap.add_argument("--html", help="the saved police page")
-    ap.add_argument("--fetch", action="store_true", help="download the police page")
-    ap.add_argument("--osm", help="OSM JSON of roads + speed_camera nodes (Overpass out geom or --fetch-osm)")
-    ap.add_argument("--fetch-osm", metavar="PATH", help="download OSM roads + speed_camera nodes and cache to PATH")
+    ap.add_argument("--country", default="Ukraine", help="a key of tools/cameras_sources.json (default Ukraine); only "
+                    "that country's sources are fetched")
+    ap.add_argument("--html", help="Ukraine: the saved police page")
+    ap.add_argument("--fetch", action="store_true", help="Ukraine: download the police page")
+    ap.add_argument("--osm", help="OSM JSON from an earlier --fetch-osm (roads + speed_camera nodes)")
+    ap.add_argument("--fetch-osm", metavar="PATH", help="download the OSM data and cache it to PATH")
     ap.add_argument("--out", default="native/plugin/cameras.txt")
+    ap.add_argument("--date", help="the data date YYYY-MM-DD for the '# date' line (the iDrive App information page shows"
+                    " it): default today for a fetch, else the YYYY-MM-DD in the --html/--osm file name, else its mtime")
     a = ap.parse_args()
-    if a.fetch:
-        req = urllib.request.Request(URL, headers={"User-Agent": UA})
-        text = urllib.request.urlopen(req, timeout=60).read().decode("utf-8")
-    elif a.html:
-        text = open(a.html, encoding="utf-8").read()
+    country = load_country(a.country)
+    kind = country["list"]["kind"]
+    if kind == "patrolpolice_ua":
+        if a.fetch:
+            req = urllib.request.Request(country["list"]["url"], headers={"User-Agent": UA})
+            text = urllib.request.urlopen(req, timeout=60).read().decode("utf-8")
+        elif a.html:
+            text = open(a.html, encoding="utf-8").read()
+        else:
+            ap.error("Ukraine: --html or --fetch")
+        rows = parse_table(text)
+        if a.fetch_osm:
+            elements = fetch_osm(rows, a.fetch_osm)
+        elif a.osm:
+            elements = json.load(open(a.osm, encoding="utf-8"))["elements"]
+        else:
+            elements = []
+        source = "Patrol Police, %s" % country["list"]["url"]
+    elif kind == "osm_country":
+        if a.fetch_osm:
+            elements = fetch_osm_country(country["iso"], a.fetch_osm)
+        elif a.osm:
+            elements = json.load(open(a.osm, encoding="utf-8"))["elements"]
+        else:
+            ap.error("%s: --fetch-osm PATH or --osm PATH" % a.country)
+        rows = rows_from_osm(elements)
+        source = "OpenStreetMap highway=speed_camera (ODbL), limits in %s" % country.get("limit_unit", "km/h")
     else:
-        ap.error("--html or --fetch")
-    rows = parse_table(text)
-    if a.fetch_osm:
-        elements = fetch_osm(rows, a.fetch_osm)
-    elif a.osm:
-        elements = json.load(open(a.osm, encoding="utf-8"))["elements"]
-    else:
-        elements = []
-    dirs, stats = directions(rows, elements)
+        raise SystemExit("cameras_sources.json: unknown list kind %r" % kind)
+    date = data_date(a)
+    dirs, stats = directions(rows, elements, country.get("traffic") == "left")
     with open(a.out, "w", encoding="utf-8") as f:
-        f.write("# ExtendedHUD speed cameras: lat lon limit dir (hud_cam.h). Source: Patrol Police, %s\n" % URL)
+        f.write("# ExtendedHUD speed cameras: lat lon limit dir (hud_cam.h). Source: %s\n" % source)
+        f.write("# country %s\n" % country["name"])   # the App information page shows the country and the date
+        f.write("# date %s\n" % date)
         f.write("# %d fixed cameras; dir from OpenStreetMap: %s\n" % (len(rows), ", ".join("%s %d" % kv for kv in sorted(stats.items()))))
         for r, d in zip(rows, dirs):
             f.write("%.6f %.6f %d %d\n" % (r["lat"], r["lon"], r["limit"], d))
     known = sum(1 for d in dirs if d >= 0)
-    print("%d cameras -> %s; direction known for %d (%s)" % (len(rows), a.out, known, stats))
+    print("%s: %d cameras, data from %s -> %s; direction known for %d (%s)" % (country["name"], len(rows), date, a.out,
+                                                                                known, stats))
 
 
 if __name__ == "__main__":

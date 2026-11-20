@@ -2,6 +2,7 @@
 #include "hud_app.h"
 
 #include <stdio.h>
+#include <stdlib.h>
 #include <string.h>
 #include <unistd.h>
 
@@ -131,6 +132,59 @@ int hud_app_worker_argv(const char *dir, const char *gateway, char *buf, size_t 
     argv[argc++] = paths[3];
     argv[argc] = NULL;
     return argc;
+}
+
+void hud_app_version_label(char *out, size_t cap)
+{
+    snprintf(out, cap, "Version %s, released %s", HUD_APP_VERSION, HUD_APP_RELEASED);
+}
+
+/* "# key value" header value into out, trimmed; 1 when the line is that key */
+static int header(const char *line, const char *key, char *out, size_t cap)
+{
+    size_t k = strlen(key), n;
+    if (strncmp(line, "# ", 2) || strncmp(line + 2, key, k) || line[2 + k] != ' ') return 0;
+    line += 3 + k;
+    n = strcspn(line, "\r\n");
+    while (n && line[n - 1] == ' ') n--;
+    if (n >= cap) n = cap - 1;
+    memcpy(out, line, n);
+    out[n] = 0;
+    return 1;
+}
+
+void hud_app_cameras_line(hud_cams_meta *m, const char *line)
+{
+    char *e;
+    while (*line == ' ' || *line == '\t') line++;
+    if (*line == '#') {
+        char date[16];
+        if (header(line, "date", date, sizeof date)) {
+            if (strlen(date) == 10 && date[4] == '-' && date[7] == '-' && strspn(date, "0123456789-") == 10)
+                memcpy(m->date, date, 11);
+        }
+        else header(line, "country", m->country, sizeof m->country);
+        return;
+    }
+    strtod(line, &e);
+    if (e != line) m->count++;
+}
+
+void hud_app_cameras_label(const char *dir, char *out, size_t cap)
+{
+    char path[256], line[256];
+    hud_cams_meta m;
+    FILE *f;
+    snprintf(path, sizeof path, "%s/cameras.txt", dir);
+    if (!(f = fopen(path, "r"))) {
+        snprintf(out, cap, "Speed cameras: no list installed");
+        return;
+    }
+    memset(&m, 0, sizeof m);
+    while (fgets(line, sizeof line, f)) hud_app_cameras_line(&m, line);
+    fclose(f);
+    snprintf(out, cap, "Speed cameras: %s, %d, %s%s", m.country[0] ? m.country : "country unknown", m.count,
+             m.date[0] ? "data from " : "data date unknown", m.date);
 }
 
 void hud_app_status(const hud_settings *s, int running, const char *conflict, int restarts, char *out, size_t cap)

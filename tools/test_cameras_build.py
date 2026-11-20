@@ -2,7 +2,12 @@
 import math
 import unittest
 
-from cameras_build import directions, parse_table
+import argparse
+import datetime
+import os
+import tempfile
+
+from cameras_build import data_date, directions, load_country, parse_limit, parse_table, rows_from_osm
 from hud_car_run import STEPS, worker_args
 
 LAT, LON = 50.45, 30.50
@@ -110,6 +115,47 @@ class CamerasBuildTest(unittest.TestCase):
         self.assertEqual(dirs, [0, -1])
         dirs, _ = directions([cam(0, 33)], [ow])
         self.assertEqual(dirs, [-1])
+
+    def test_data_date(self):
+        # The App information page shows cameras.txt's "# date": the police list's date, never the release's.
+        ns = lambda **k: argparse.Namespace(**{"date": None, "fetch": False, "html": None, **k})
+        self.assertEqual(data_date(ns(date="2026-12-01", html="x.html")), "2026-12-01")
+        self.assertEqual(data_date(ns(fetch=True)), datetime.date.today().isoformat())
+        self.assertEqual(data_date(ns(html="data/kaf-2026-11-19.html")), "2026-11-19")
+        with tempfile.NamedTemporaryFile(suffix=".html") as f:
+            os.utime(f.name, (0, 1767225600))   # 2026-01-01 00:00 UTC
+            self.assertIn(data_date(ns(html=f.name)), ("2025-12-31", "2026-01-01"))
+        with self.assertRaises(SystemExit):
+            data_date(ns(date="19.11.2026", html="x.html"))
+        shipped = open(os.path.join(os.path.dirname(__file__), "..", "native", "plugin", "cameras.txt"), encoding="utf-8")
+        with shipped:
+            self.assertRegex(shipped.read(4096), r"\n# date \d{4}-\d{2}-\d{2}\n")
+
+    def test_countries(self):
+        # Sources are grouped per country (cameras_sources.json); only the chosen one is fetched.
+        ua, gb = load_country("Ukraine"), load_country("UnitedKingdom")
+        self.assertEqual((ua["name"], ua["traffic"], ua["list"]["kind"]), ("Ukraine", "right", "patrolpolice_ua"))
+        self.assertEqual((gb["name"], gb["traffic"], gb["list"]["kind"]), ("United Kingdom", "left", "osm_country"))
+        with self.assertRaises(SystemExit):
+            load_country("Atlantis")
+        with self.assertRaises(SystemExit):
+            load_country("_about")
+        self.assertEqual([parse_limit(v) for v in ("50", "30 mph", " 70", "none", "", None, "RU:urban")], [50, 30, 70, 0, 0, 0, 0])
+
+    def test_osm_country_rows_and_left_hand_traffic(self):
+        road = way([(-300, 0), (300, 0)], maxspeed="40 mph")
+        no_limit_road = way([(-300, 500), (300, 500)])
+        elements = [road, no_limit_road,
+                    osm_cam(0, 8, "", maxspeed="30 mph"),      # its own limit
+                    osm_cam(100, 8, ""),                        # the road's 40
+                    osm_cam(0, 506, "")]                        # no limit anywhere: kept, never alerts
+        rows = rows_from_osm(elements)
+        self.assertEqual(sorted(r["limit"] for r in rows), [0, 30, 40])
+        # A camera 8 m east of a north-running two-way road serves the northbound lane in right-hand traffic and the
+        # southbound one in left-hand traffic.
+        one = [cam(0, 8)]
+        self.assertEqual(directions(one, [road])[0], [0])
+        self.assertEqual(directions(one, [road], left_hand=True)[0], [180])
 
     def test_car_steps(self):
         k = worker_args(STEPS["K1"], {"handles": "31,32", "canvas": "120x72", "container": "23", "inst": "2", "red": "9"})

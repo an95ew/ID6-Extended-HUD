@@ -1,4 +1,6 @@
 # ExtendedHUD speed cameras: lat lon limit dir (hud_cam.h). Source: Patrol Police, https://patrolpolice.gov.ua/automatic_fixation/informatsiya-pro-vstanovleni-kaf/
+# country Ukraine
+# date 2026-11-19
 # 426 fixed cameras; dir from OpenStreetMap: median pair split 1, no road within 30 m 4, on the centre line: unknown 4, one-way road 22, osm speed_camera (backward) 87, osm speed_camera (forward) 186, osm speed_camera: both ways 40, pair completion 2, pair, by side 13, single, by side 67
 50.479649 30.453529 50 48
 50.456731 30.530181 50 311

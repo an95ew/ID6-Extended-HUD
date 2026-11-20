@@ -69,7 +69,8 @@ def main():
             'kCamOrangeModel': ('m', 'raBoolModel'), 'kStatusModel': ('m', 'raDataModel'), 'kAlwaysComponent': ('c', 'checkbox'),
             'kCamOrangeComponent': ('c', 'checkbox'), 'kCamDistComponent': ('c', 'button'),
             'kBlinkModel': ('m', 'raDataModel'), 'kBlinkAction': ('a', 'raAction'),
-            'kCamDistModel': ('m', 'raDataModel'), 'kCamDistAction': ('a', 'raAction')}
+            'kCamDistModel': ('m', 'raDataModel'), 'kCamDistAction': ('a', 'raAction'),
+            'kVersionModel': ('m', 'raDataModel'), 'kCamerasInfoModel': ('m', 'raDataModel')}
     # Navigation's ids (feature/nav branch) stay retired: the car's menu cache may still hold them.
     for i in (23, 53, 153):
         if i in ids:

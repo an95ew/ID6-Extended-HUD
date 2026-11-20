@@ -1,0 +1,49 @@
+{
+  "_about": "Speed-camera sources per country for tools/cameras_build.py --country KEY (skill update-speedcam-db). Only the chosen country is fetched. 'list' gives the cameras and limits, 'directions' how each camera's direction of travel is found, 'other' sources an agent may check by hand (status as last seen). Add a country: a new key with name, iso, traffic (right|left: which side a two-way road's camera serves), limit_unit and a 'list' of a kind cameras_build.py knows (patrolpolice_ua, osm_country).",
+  "Ukraine": {
+    "name": "Ukraine",
+    "iso": "UA",
+    "traffic": "right",
+    "limit_unit": "km/h",
+    "list": {
+      "kind": "patrolpolice_ua",
+      "url": "https://patrolpolice.gov.ua/automatic_fixation/informatsiya-pro-vstanovleni-kaf/",
+      "note": "Patrol Police table of every fixed camera connected to the system (road, km, place, limit, GPS). No direction column. TruCAM posts are not in it (owner: fixed cameras only)."
+    },
+    "directions": {
+      "kind": "osm_near",
+      "note": "OSM highway=speed_camera nodes within 25 m (direction=forward|backward|both; numeric degrees are ignored, 7/9 were lens azimuths), then one-way roads, then the side of a two-way road, then pair completion. 'both' nodes are radar complexes (KASKAD, Expert-FS, HOAG-50) that OSM notes say control both directions."
+    },
+    "other": [
+      {
+        "name": "data.gov.ua: Місцезнаходження камер автоматичної фіксації (National Police, Cameras.csv)",
+        "url": "https://data.gov.ua/dataset/75f81c43-c1e9-4caa-a396-8b4224823f0f",
+        "status": "has a direction column; portal 'temporarily unavailable' (403) on 2026-11-19 and 2026-11-20, no Wayback copy. Retry: it would settle the 48 cameras shown both ways."
+      },
+      {
+        "name": "Diia app 'Мапа камер', infoportal.ua, zaxid.net maps",
+        "status": "built from the same police list, no API"
+      }
+    ]
+  },
+  "UnitedKingdom": {
+    "name": "United Kingdom",
+    "iso": "GB",
+    "traffic": "left",
+    "limit_unit": "mph",
+    "list": {
+      "kind": "osm_country",
+      "note": "Every OSM highway=speed_camera node in the country (3,495 on 2026-11-20), with the drivable ways through or near it. The limit is the node's maxspeed, else the nearest way's; the number is kept as signed (mph). Not checked on a car: a camera without a limit never alerts."
+    },
+    "directions": {
+      "kind": "osm_near",
+      "note": "As Ukraine, from the same OSM data. Expect fewer directions: many UK nodes carry no direction tag."
+    },
+    "other": [
+      {
+        "name": "Safety camera partnerships (per region, e.g. Thames Valley, London)",
+        "status": "published lists per partnership, no national open file known; not wired"
+      }
+    ]
+  }
+}

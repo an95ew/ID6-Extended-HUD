@@ -11,7 +11,7 @@
 #include <stdint.h>
 
 enum {
-    HUD_CAM_MAX = 1024,
+    HUD_CAM_MAX = 16384,        /* a country's list: Ukraine 426, the UK ~3500 in OSM (2026-11-20) */
     HUD_CAM_SHOW_M = 500,       /* appears this far before the camera (the default; settings cam_dist) */
     HUD_CAM_PAST_M = 50,        /* and goes this far after it */
     HUD_CAM_AHEAD_DEG = 30,     /* the camera must lie within this of the heading to count as ahead */

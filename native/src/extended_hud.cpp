@@ -34,6 +34,8 @@ const unsigned kAlwaysComponent = 152u, kCamOrangeComponent = 156u, kCamDistComp
 const unsigned kBlinkModel = 54u, kBlinkAction = 31u;
 // the Warning distance page (state 102): label 170 shows model 57, buttons 171-173 send actions 41-43 = 300, 500, 800 m
 const unsigned kCamDistModel = 57u, kCamDistAction = 41u;
+// the App information page (state 103): labels 180/181 show the version (58) and the camera list's size and date (59)
+const unsigned kVersionModel = 58u, kCamerasInfoModel = 59u;
 const char kLog[] = "/tmp/hud-sportbar.log";
 // CDS probe (hud_cds.h): armed by cds.txt; cds.guard exists from registering until kCdsGuardMs later, so a start that
 // dies in the CDS calls leaves it behind and the next start skips CDS (delete cds.guard over SSH to retry).
@@ -153,6 +155,11 @@ class ExtendedHUD : public bmw::PluginApp {
         updateModel(kBlinkModel, bmw::BasicString<char>(label));
         hud_app_cam_dist_label(&set_, label, sizeof label);
         updateModel(kCamDistModel, bmw::BasicString<char>(label));
+        hud_app_version_label(label, sizeof label);
+        updateModel(kVersionModel, bmw::BasicString<char>(label));
+        // read at every refresh: an updated cameras.txt (skill update-speedcam-db) shows without a release
+        hud_app_cameras_label(HUD_APP_DIR, label, sizeof label);
+        updateModel(kCamerasInfoModel, bmw::BasicString<char>(label));
     }
     void showStatus() {
         char s[128];

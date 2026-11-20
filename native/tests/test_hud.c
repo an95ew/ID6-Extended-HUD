@@ -685,6 +685,38 @@ static void test_app(void) {
         hud_app_cam_dist_label(&b, label, sizeof label);
         assert(!strcmp(label, "Warning from 800 m before the camera"));
     }
+    /* The App information page: the release from the build, the camera list's country, size and date from cameras.txt */
+    {
+        char label[128], line[256];
+        const char *txt = "# ExtendedHUD speed cameras\n# country Ukraine\n# date 2026-11-19\n# 3 fixed\n50.1 30.2 50 10\n"
+                          "  50.2 30.3 110 -1\r\n\n50.3 30.4 50 200\n";
+        hud_cams_meta m;
+        FILE *f;
+        memset(&m, 0, sizeof m);
+        hud_app_cameras_line(&m, "# date 2026-11-19\r\n");
+        hud_app_cameras_line(&m, "# country United Kingdom \n");
+        hud_app_cameras_line(&m, "# date 19.11.2026\n");              /* not YYYY-MM-DD: ignored */
+        hud_app_cameras_line(&m, "51.5 -0.1 30 90");
+        assert(m.count == 1 && !strcmp(m.date, "2026-11-19") && !strcmp(m.country, "United Kingdom"));
+        hud_app_version_label(label, sizeof label);
+        assert(!strcmp(label, "Version " HUD_APP_VERSION ", released " HUD_APP_RELEASED));
+        hud_app_cameras_label(dir, label, sizeof label);
+        assert(!strcmp(label, "Speed cameras: no list installed"));
+        snprintf(path, sizeof path, "%s/cameras.txt", dir);
+        assert((f = fopen(path, "w")) && fputs(txt, f) >= 0 && fclose(f) == 0);
+        hud_app_cameras_label(dir, label, sizeof label);
+        assert(!strcmp(label, "Speed cameras: Ukraine, 3, data from 2026-11-19"));
+        assert((f = fopen(path, "w")) && fputs("50.1 30.2 50 10\n", f) >= 0 && fclose(f) == 0);
+        hud_app_cameras_label(dir, label, sizeof label);
+        assert(!strcmp(label, "Speed cameras: country unknown, 1, data date unknown"));
+        remove(path);
+        /* the shipped list names its country and date (tools/cameras_build.py) */
+        memset(&m, 0, sizeof m);
+        assert((f = fopen("plugin/cameras.txt", "r")));
+        while (fgets(line, sizeof line, f)) hud_app_cameras_line(&m, line);
+        fclose(f);
+        assert(m.count > 400 && strlen(m.date) == 10 && !strcmp(m.country, "Ukraine"));
+    }
     argc = hud_app_worker_argv(HUD_APP_DIR, "169.254.21.3", buf, sizeof buf, argv, HUD_APP_MAX_ARGS);
     assert(argc > 10 && argv[argc] == NULL);
     assert(!strcmp(argv[0], HUD_APP_DIR "/hud-sportbar-qnx"));
