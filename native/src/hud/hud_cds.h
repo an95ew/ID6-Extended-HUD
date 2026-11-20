@@ -11,8 +11,10 @@
 #include <stddef.h>
 #include <stdint.h>
 
-enum { HUD_CDS_MAX = 16, HUD_CDS_NAME = 64, HUD_CDS_TEXT = 160 };
-typedef enum { HUD_CDS_LOG, HUD_CDS_RPM, HUD_CDS_KPH, HUD_CDS_GEAR, HUD_CDS_MODE } hud_cds_kind;
+enum { HUD_CDS_MAX = 16, HUD_CDS_NAME = 64, HUD_CDS_TEXT = 320 };
+/* GPS and HEADING feed the speed-camera alert (geo_frame): their values are JSON objects with decimals, so they are read
+   by key (latitude/longitude, heading), not as the first integer. */
+typedef enum { HUD_CDS_LOG, HUD_CDS_RPM, HUD_CDS_KPH, HUD_CDS_GEAR, HUD_CDS_MODE, HUD_CDS_GPS, HUD_CDS_HEADING } hud_cds_kind;
 
 typedef struct {
     char name[HUD_CDS_NAME];
@@ -26,6 +28,15 @@ int hud_cds_parse(const char *text, size_t len, hud_cds_prop *out, int max);
    printable ASCII ('?' for the rest), and its first integer (an optional '-' then digits), or -1 when it has none.
    Returns the number of units read. */
 int hud_cds_value(const uint16_t *s, int max, char *ascii, size_t cap, long *number);
+/* The number after "key": in a JSON text (decimals and exponents allowed; the first match of the key). 1 when found. */
+int hud_cds_json_num(const char *text, const char *key, double *out);
+/* The car's position as the plugin keeps it between CDS updates. */
+typedef struct { int have_pos, heading; int32_t lat_e6, lon_e6; } hud_cds_geo;
+/* A GPS or HEADING value into g: latitude/longitude (or lat/lon) in degrees, heading in degrees. 1 when it took one. */
+int hud_cds_geo_take(hud_cds_geo *g, hud_cds_kind kind, const char *text);
+struct geo_frame;
+/* The frame for g (0 when there is no position yet). */
+int hud_cds_geo_frame(const hud_cds_geo *g, uint64_t now_ms, struct geo_frame *f);
 struct drive_frame;
 /* The frame for a value of kind (not LOG): only that field set, the rest -1. 0 when there is nothing to send. */
 int hud_cds_frame(hud_cds_kind kind, long number, uint64_t now_ms, struct drive_frame *f);

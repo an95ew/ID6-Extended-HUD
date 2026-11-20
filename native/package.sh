@@ -18,8 +18,8 @@ OUT = NATIVE / "out"
 PLUGIN = NATIVE / "plugin"
 LICENSE = NATIVE.parent / "LICENSE"
 THIRD_PARTY = NATIVE.parent / "third-party"
-POLYFORM_NOTICE = THIRD_PARTY / "nbtevo-carplay-advanced-NOTICE"
 IDRIVE7_LICENSE = THIRD_PARTY / "idrive7-apps-LICENSE"
+ABI_CHECK = NATIVE.parent / "tools" / "abi_check.py"   # INSTALL.md step 3, no QNX SDK needed
 STAGE = OUT / "ExtendedHUD"
 ZIP_PATH = OUT / "extended-hud.zip"
 
@@ -28,7 +28,7 @@ REQUIRED_BINS = {
     "hud-sportbar-qnx": (2,),       # ET_EXEC QNX worker
     "shift-deck-qnx": (2,),         # ET_EXEC QNX OBD collector
 }
-REQUIRED_CONFIG = ("ExtendedHUD.manifest", "ExtendedHUD.xml", "gateway-ip.txt", "cds.txt")   # cds.txt: the car data feed (run 6)
+REQUIRED_CONFIG = ("ExtendedHUD.manifest", "ExtendedHUD.xml", "gateway-ip.txt", "cds.txt", "cameras.txt")   # cds.txt: the car data feed (run 6); cameras.txt: tools/cameras_build.py
 EXECUTABLES = {"hud-sportbar-qnx", "shift-deck-qnx"}
 
 def check_arm_elf(path: Path, allowed_types):
@@ -46,7 +46,7 @@ for name, types in REQUIRED_BINS.items():
 for name in REQUIRED_CONFIG:
     if not (PLUGIN / name).is_file():
         sys.exit(f"Missing plugin file: {PLUGIN / name}")
-for extra in (LICENSE, POLYFORM_NOTICE, IDRIVE7_LICENSE):
+for extra in (LICENSE, IDRIVE7_LICENSE, ABI_CHECK):
     if not extra.is_file():
         sys.exit(f"Missing license/notice file: {extra}")
 
@@ -77,9 +77,9 @@ readme_text = (
     "Install ExtendedHUD/ into /var/opt/hmi/data/ID5/Plugins/ExtendedHUD/ on the HMI node,\n"
     "mark hud-sportbar-qnx and shift-deck-qnx executable (chmod 755), verify every uploaded\n"
     "file by hash readback, and restart iDrive. Do not install alongside HudTest.\n\n"
-    "Licensing: MIT (LICENSE, LICENSE-idrive7-apps.txt), ISC (Mapbox glyph geometry in\n"
-    "hud-sportbar-qnx), and PolyForm Noncommercial License 1.0.0\n"
-    "(NOTICE-polyform-noncommercial.txt, applies to hud_rg compiled into hud-sportbar-qnx).\n"
+    "Install guide: INSTALL.md in https://github.com/an95ew/ID6-Extended-HUD. Check the library against your car's\n"
+    "frameworks first: python3 abi_check.py ExtendedHUD/libExtendedHUD.so libAppFramework.A.so libCoreFramework.A.so\n\n"
+    "Licensing: MIT (LICENSE, LICENSE-idrive7-apps.txt).\n"
 )
 
 sums_lines = []
@@ -100,8 +100,8 @@ with zipfile.ZipFile(ZIP_PATH, "w") as zf:
     write_zip_bytes(zf, "SHA256SUMS", sums_bytes, 0o644)
     write_zip_bytes(zf, "LICENSE", LICENSE.read_bytes(), 0o644)
     write_zip_bytes(zf, "LICENSE-idrive7-apps.txt", IDRIVE7_LICENSE.read_bytes(), 0o644)
-    write_zip_bytes(zf, "NOTICE-polyform-noncommercial.txt", POLYFORM_NOTICE.read_bytes(), 0o644)
     write_zip_bytes(zf, "README.md", readme_text.encode("utf-8"), 0o644)
+    write_zip_bytes(zf, "abi_check.py", ABI_CHECK.read_bytes(), 0o755)
 
 # Read back and verify every entry in SHA256SUMS.
 with zipfile.ZipFile(ZIP_PATH, "r") as zf:

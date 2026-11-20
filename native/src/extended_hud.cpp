@@ -26,12 +26,16 @@ const unsigned kDataUpdateMessage = 0x40000003u;
 const unsigned kPollKey = 0x48534252u;   // HSBR, private to this app
 const unsigned kPollMs = 1000u;
 const unsigned kRetryMs[] = {2000u, 5000u, 15000u, 60000u};
-// ExtendedHUD.xml
-const unsigned kStatusModel = 50u, kSportBarModel = 51u, kAlwaysModel = 52u, kNavModel = 53u;
-const unsigned kSportBarAction = 21u, kAlwaysAction = 22u, kNavAction = 23u;
-const unsigned kAlwaysComponent = 152u;
+// ExtendedHUD.xml (23/53/153 were Navigation, now on the feature/nav branch: never reuse them)
+const unsigned kStatusModel = 50u, kSportBarModel = 51u, kAlwaysModel = 52u, kCamerasModel = 55u, kCamOrangeModel = 56u;
+const unsigned kSportBarAction = 21u, kAlwaysAction = 22u, kCamerasAction = 25u, kCamOrangeAction = 26u;
+const unsigned kAlwaysComponent = 152u, kCamOrangeComponent = 156u, kCamDistComponent = 157u;
 // the Shift point page (state 101): label 160 shows model 54, buttons 161-165 send actions 31-35 = 6200..6600 rpm
 const unsigned kBlinkModel = 54u, kBlinkAction = 31u;
+// the Warning distance page (state 102): label 170 shows model 57, buttons 171-173 send actions 41-43 = 300, 500, 800 m
+const unsigned kCamDistModel = 57u, kCamDistAction = 41u;
+// the App information page (state 103): labels 180/181 show the version (58) and the camera list's size and date (59)
+const unsigned kVersionModel = 58u, kCamerasInfoModel = 59u;
 const char kLog[] = "/tmp/hud-sportbar.log";
 // CDS probe (hud_cds.h): armed by cds.txt; cds.guard exists from registering until kCdsGuardMs later, so a start that
 // dies in the CDS calls leaves it behind and the next start skips CDS (delete cds.guard over SSH to retry).
@@ -63,6 +67,8 @@ class ExtendedHUD : public bmw::PluginApp {
     long cdsLast_[HUD_CDS_MAX];          // the last number per property, -1 none yet
     uint64_t cdsSentAt_[HUD_CDS_MAX];
     int ncds_, cdsSock_;
+    hud_cds_geo geo_;                   // the car's position for the camera alert (kinds gps, heading)
+    uint64_t geoSentAt_;
     bool cdsArmed_, cdsOn_, cdsGuard_;
     uint64_t cdsStartAt_, cdsGuardUntil_;
     unsigned cdsLines_;
@@ -135,12 +141,25 @@ class ExtendedHUD : public bmw::PluginApp {
         // off it. Car 2026-11-18: 2 alone made it unselectable but not grey.
         setProperty(kAlwaysComponent, 1u, bmw::Parcel(set_.sport_bar != 0));
         setProperty(kAlwaysComponent, 2u, bmw::Parcel(set_.sport_bar != 0));
+        // the camera's colour and distance, the same way under Display Speed Camera Warning
+        setProperty(kCamOrangeComponent, 1u, bmw::Parcel(set_.cameras != 0));
+        setProperty(kCamOrangeComponent, 2u, bmw::Parcel(set_.cameras != 0));
+        setProperty(kCamDistComponent, 1u, bmw::Parcel(set_.cameras != 0));
+        setProperty(kCamDistComponent, 2u, bmw::Parcel(set_.cameras != 0));
         updateModel(kSportBarModel, set_.sport_bar ? 1 : 0);
         updateModel(kAlwaysModel, set_.always ? 1 : 0);
-        updateModel(kNavModel, set_.nav ? 1 : 0);
-        char blink[64];
-        hud_app_blink_label(&set_, blink, sizeof blink);
-        updateModel(kBlinkModel, bmw::BasicString<char>(blink));
+        updateModel(kCamerasModel, set_.cameras ? 1 : 0);
+        updateModel(kCamOrangeModel, set_.cam_orange ? 1 : 0);
+        char label[64];
+        hud_app_blink_label(&set_, label, sizeof label);
+        updateModel(kBlinkModel, bmw::BasicString<char>(label));
+        hud_app_cam_dist_label(&set_, label, sizeof label);
+        updateModel(kCamDistModel, bmw::BasicString<char>(label));
+        hud_app_version_label(label, sizeof label);
+        updateModel(kVersionModel, bmw::BasicString<char>(label));
+        // read at every refresh: an updated cameras.txt (skill update-speedcam-db) shows without a release
+        hud_app_cameras_label(HUD_APP_DIR, label, sizeof label);
+        updateModel(kCamerasInfoModel, bmw::BasicString<char>(label));
     }
     void showStatus() {
         char s[128];
@@ -171,12 +190,17 @@ class ExtendedHUD : public bmw::PluginApp {
         apply();
         return true;
     }
+    template <int Choice> bool camDist(const bmw::Parcel&) {
+        hud_app_set_cam_dist(&set_, Choice);
+        apply();
+        return true;
+    }
 
 public:
     ExtendedHUD(bmw::IDispatcher& d, bmw::BasicString<char> name, unsigned maj, unsigned mn,
                 bmw::RHMIInterfaceVersion rhmi, const bmw::Bundle& cfg, const bmw::Bundle& res)
         : bmw::PluginApp(d, name, maj, mn, rhmi, cfg, res), worker_(-1), stopping_(false), generation_(0),
-          restarts_(0), retry_at_(0), conflict_(0), ncds_(0), cdsSock_(-1), cdsArmed_(false), cdsOn_(false),
+          restarts_(0), retry_at_(0), conflict_(0), ncds_(0), cdsSock_(-1), geoSentAt_(0), cdsArmed_(false), cdsOn_(false),
           cdsGuard_(false), cdsStartAt_(0), cdsGuardUntil_(0), cdsLines_(0) {
         hud_app_defaults(&set_);
         status_[0] = 0;
@@ -208,8 +232,10 @@ public:
         addHandler(kSportBarAction, action);
         action.m_exec = &Action::execImpl<ExtendedHUD, &ExtendedHUD::toggle<HUD_APP_ALWAYS> >;
         addHandler(kAlwaysAction, action);
-        action.m_exec = &Action::execImpl<ExtendedHUD, &ExtendedHUD::toggle<HUD_APP_NAV> >;
-        addHandler(kNavAction, action);
+        action.m_exec = &Action::execImpl<ExtendedHUD, &ExtendedHUD::toggle<HUD_APP_CAMERAS> >;
+        addHandler(kCamerasAction, action);
+        action.m_exec = &Action::execImpl<ExtendedHUD, &ExtendedHUD::toggle<HUD_APP_CAM_ORANGE> >;
+        addHandler(kCamOrangeAction, action);
         action.m_exec = &Action::execImpl<ExtendedHUD, &ExtendedHUD::blink<0> >;
         addHandler(kBlinkAction + 0u, action);
         action.m_exec = &Action::execImpl<ExtendedHUD, &ExtendedHUD::blink<1> >;
@@ -220,6 +246,12 @@ public:
         addHandler(kBlinkAction + 3u, action);
         action.m_exec = &Action::execImpl<ExtendedHUD, &ExtendedHUD::blink<4> >;
         addHandler(kBlinkAction + 4u, action);
+        action.m_exec = &Action::execImpl<ExtendedHUD, &ExtendedHUD::camDist<0> >;
+        addHandler(kCamDistAction + 0u, action);
+        action.m_exec = &Action::execImpl<ExtendedHUD, &ExtendedHUD::camDist<1> >;
+        addHandler(kCamDistAction + 1u, action);
+        action.m_exec = &Action::execImpl<ExtendedHUD, &ExtendedHUD::camDist<2> >;
+        addHandler(kCamDistAction + 2u, action);
         close(open(kLog, O_WRONLY | O_CREAT | O_TRUNC, 0644));   // a fresh log per HMI start
         const DiagnosticGateway gateway(HUD_APP_DIR "/gateway-ip.txt");
         strcpy(gateway_, gateway.host());
@@ -272,6 +304,7 @@ private:
         // worker drops data older than 2 s, so each routed value is repeated: unchanged is still the car's value.
         for (int i = 0; cdsOn_ && i < ncds_; ++i)
             if (cds_[i].kind != HUD_CDS_LOG && cdsLast_[i] >= 0 && now - cdsSentAt_[i] >= 500u) cdsSend(i, cdsLast_[i], now);
+        if (cdsOn_ && geo_.have_pos && now - geoSentAt_ >= 500u) geoSend(now);   // parked, the position does not change
         if (cdsGuard_ && now >= cdsGuardUntil_) {
             remove(kCdsGuard);
             cdsGuard_ = false;
@@ -286,6 +319,8 @@ private:
         cdsArmed_ = false;
         cdsOn_ = true;
         for (int i = 0; i < HUD_CDS_MAX; ++i) { cdsLast_[i] = -1; cdsSentAt_[i] = 0; }
+        memset(&geo_, 0, sizeof geo_);
+        geo_.heading = -1;
         cdsSock_ = socket(AF_INET, SOCK_DGRAM, 0);
         if (cdsSock_ >= 0) fcntl(cdsSock_, F_SETFL, fcntl(cdsSock_, F_GETFL) | O_NONBLOCK);
         typedef bmw::Delegate<bool, const bmw::BasicString<unsigned short>&> Watch;
@@ -336,9 +371,25 @@ private:
         long number;
         hud_cds_value(value.data(), HUD_CDS_TEXT, text, sizeof text, &number);
         cdsLog("value", cds_[i].name, value);
+        if (cds_[i].kind == HUD_CDS_GPS || cds_[i].kind == HUD_CDS_HEADING) {
+            if (hud_cds_geo_take(&geo_, cds_[i].kind, text)) geoSend(bd_mono_ms());
+            return true;
+        }
         if (cds_[i].kind != HUD_CDS_LOG) cdsLast_[i] = number;
         cdsSend(i, number, bd_mono_ms());
         return true;
+    }
+    void geoSend(uint64_t now) {
+        struct geo_frame f;
+        geoSentAt_ = now;
+        if (cdsSock_ >= 0 && hud_cds_geo_frame(&geo_, now, &f)) {
+            struct sockaddr_in to;
+            memset(&to, 0, sizeof to);
+            to.sin_family = AF_INET;
+            to.sin_port = htons(HUD_APP_UDP_PORT);
+            to.sin_addr.s_addr = htonl(INADDR_LOOPBACK);
+            sendto(cdsSock_, &f, sizeof f, 0, reinterpret_cast<struct sockaddr*>(&to), sizeof to);   // never blocks
+        }
     }
     void cdsSend(int i, long number, uint64_t now) {
         struct drive_frame f;

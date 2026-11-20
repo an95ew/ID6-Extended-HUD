@@ -56,14 +56,6 @@ STEPS = {
                 "Photograph the 16 squares: index = 16 + row x 8 + column."),
     "B3": Step("M Strip sweep, watch the flash from 6,400", "ours", ["--draw-parked", "--seconds", "30"], 30,
                "Video the sweep; the bar must blink from 6,400.", ("palette",)),
-    "B4": Step("navigation scene, Cyrillic", "ours", ["--draw-parked", "--scene", "nav", "--seconds", "40"], 40,
-               "Video: street (area 2), distance (area 3), lanes. Does Cyrillic render?"),
-    "B4c": Step("navigation scene, Latin fallback", "ours",
-                ["--draw-parked", "--scene", "nav", "--text", "latin", "--seconds", "40"], 40,
-                "Only if B4 showed boxes or blanks. How many characters fit the street line?"),
-    "B4d": Step("navigation scene, hostile texts", "ours",
-                ["--draw-parked", "--scene", "nav", "--route", "intl", "--lang", "en", "--seconds", "75"], 75,
-                "Video: long names cut cleanly, l/e/A with accents, six lanes."),
     "B5": Step("M Strip on the measured canvas", "ours", ["--draw-parked", "--seconds", "30"], 30,
                "Video: where the bar sits next to the factory speed.", ("palette", "canvas")),
     # Run 2 (car-run-2-plan.md): the sender now takes op D answers; --show/--container bring the image up.
@@ -84,8 +76,6 @@ STEPS = {
                "Photograph the 16 squares: index = 16 + row x 8 + column.", ("handles", "canvas")),
     "R8": Step("M Strip sweep on the pair that showed", "ours", ["--draw-parked", "--seconds", "30"], 30,
                "Video the sweep; the bar must blink from 6,400.", ("handles", "canvas")),
-    "R9": Step("navigation scene on the pair that showed", "ours", ["--draw-parked", "--scene", "nav", "--seconds", "40"], 40,
-               "Video: street, distance, lanes. Does Cyrillic render?", ("handles", "canvas")),
     # Run 3 (car-run-3-plan.md): 82/02 31/32 120x72 with container 23, as found in run 2.
     "S0f": Step("big swatch bars, fill colours 0..63, 8 pages of 8", "ours",
                 ["--swatches", "0", "--swatch-n", "8", "--swatch-pages", "8", "--show", "both", "--seconds", "8"], 70,
@@ -94,15 +84,6 @@ STEPS = {
     "S0l": Step("big swatch bars, line colours 0..63, 8 pages of 8", "ours",
                 ["--swatches", "0", "--swatch-n", "8", "--swatch-pages", "8", "--swatch-line", "--show", "both",
                  "--seconds", "8"], 70, "Photo each page: outlined bars in the line colour. Which is red?", ("handles", "canvas")),
-    "S1": Step("big M strip, pull 1st-5th with gear digit, steady shift state", "ours",
-               ["--draw-parked", "--trace", "pull", "--layout", "big", "--flash-ms", "0", "--shift-hold", "3000",
-                "--seconds", "40"], 40, "Video: bigger? gear digit 1..5? shift state (all lit) for ~3 s?",
-               ("handles", "canvas")),
-    "S1b": Step("big M strip, slow shift blink (2 s), one frame takes ~2.1 s", "ours",
-                ["--draw-parked", "--trace", "pull", "--layout", "big", "--flash-ms", "2000", "--shift-hold", "6000",
-                 "--seconds", "50"], 50, "Video: does the full bar go dark and lit again at each shift?", ("handles", "canvas")),
-    "S2": Step("big navigation scene", "ours", ["--draw-parked", "--scene", "nav", "--layout", "big", "--seconds", "40"], 40,
-               "Video: arrow, distance bar, lanes bigger and readable?", ("handles", "canvas")),
     # Run 4 (car-run-4-plan.md), same target as run 3.
     "T0": Step("big bars, line colours 0..15 (outline test)", "ours",
                ["--swatches", "0", "--swatch-n", "8", "--swatch-pages", "2", "--swatch-line", "--show", "both",
@@ -116,43 +97,11 @@ STEPS = {
     "T1c": Step("grid on 82/02 0x2E (120x72)", "ours",
                 ["--grid", "--handles", "31,46", "--show", "both", "--container", "23", "--seconds", "15"], 15,
                 "Photo the HUD: dots or nothing?", ("canvas",)),
-    "T2": Step("M strip, brightness cue: dim 3 through the revs, all white 4 at the shift, no backs", "ours",
-               ["--draw-parked", "--trace", "pull", "--layout", "big", "--flash-ms", "0", "--shift-hold", "3000",
-                "--palette", "3,3,3,3,3,3,4", "--shift-colour", "4", "--backs", "none", "--seconds", "40"], 40,
-               "Video: is the shift moment obvious at a glance?", ("handles", "canvas")),
-    "T2b": Step("M strip, brightness cue with outlined unlit fields", "ours",
-                ["--draw-parked", "--trace", "pull", "--layout", "big", "--flash-ms", "0", "--shift-hold", "3000",
-                 "--palette", "3,3,3,3,3,3,4", "--shift-colour", "4", "--backs", "outline", "--seconds", "40"], 40,
-                "Video: thin outlines for the unlit fields? (only if T0 drew outlines)", ("handles", "canvas")),
-    "T3": Step("big nav, texts to 0x1A/0x1B with SetVisibility (6WB text areas, JayJay3071)", "ours",
-               ["--draw-parked", "--scene", "nav", "--layout", "big", "--text-handles", "26,27", "--text-visible",
-                "--text", "latin", "--seconds", "40"], 40,
-               "Video the HUD AND the cluster: any street or distance text? Where?", ("handles", "canvas")),
-    "T3c": Step("as T3, Cyrillic", "ours",
-                ["--draw-parked", "--scene", "nav", "--layout", "big", "--text-handles", "26,27", "--text-visible",
-                 "--seconds", "40"], 40, "Video: does Cyrillic render?", ("handles", "canvas")),
-    # Run 5 (car-run-5-plan.md): a dim colour that shows by day (run 4: 3 was invisible), nav clear of the HUD's texts.
+    # Run 5 (car-run-5-plan.md): a dim colour that shows by day (run 4: 3 was invisible). Nav steps: feature/nav branch.
+    # The big-layout draws of runs 3-5 (S1, S1b, T2, T2b, U1, V1) were removed with that layout (2026-11-20).
     "U0": Step("big swatch bars by day, fill colours 2..11, 2 pages of 5", "ours",
                ["--swatches", "2", "--swatch-n", "5", "--swatch-pages", "2", "--show", "both", "--seconds", "12"], 30,
                "Video both pages: which colours show by day, and which is dimmer than white but still clear?",
-               ("handles", "canvas")),
-    "U1": Step("M strip, brightness cue with dim 5 (orange) through the revs, all white 4 at the shift, no backs", "ours",
-               ["--draw-parked", "--trace", "pull", "--layout", "big", "--flash-ms", "0", "--shift-hold", "3000",
-                "--palette", "5,5,5,5,5,5,4", "--shift-colour", "4", "--backs", "none", "--seconds", "40"], 40,
-               "Video: fields and gear visible by day? Shift moment still obvious?", ("handles", "canvas")),
-    "U2": Step("big nav with texts (Cyrillic), picture below the texts, no bar, dim 5 (roundabout ring)", "ours",
-               ["--draw-parked", "--scene", "nav", "--layout", "big", "--text-handles", "26,27", "--text-visible",
-                "--palette", "5,4,5,5,5,8,4", "--seconds", "45"], 45,
-               "Video: text clear of the arrow? Roundabout ring visible, reads as a roundabout?", ("handles", "canvas")),
-    # Owner after U1/U2: no colour inversion, BMW's look = white by day (the HUD tints it orange at night by itself).
-    "V1": Step("M strip all white 4 (no dim colour, no backs), full bar at the shift", "ours",
-               ["--draw-parked", "--trace", "pull", "--layout", "big", "--flash-ms", "0", "--shift-hold", "3000",
-                "--palette", "4,4,4,4,4,4,4", "--shift-colour", "4", "--backs", "none", "--seconds", "40"], 40,
-               "Video: OEM-like? Shift moment readable from the shape alone?", ("handles", "canvas")),
-    "V2": Step("big nav with Cyrillic texts, all white 4; lanes not to take smaller, no separators", "ours",
-               ["--draw-parked", "--scene", "nav", "--layout", "big", "--text-handles", "26,27", "--text-visible",
-                "--palette", "4,4,4,4,4,4,4", "--seconds", "45"], 45,
-               "Video: OEM-like? Roundabout reads? Which lane to take is clear? Shade around our picture?",
                ("handles", "canvas")),
     # Car run 6 (2026-11-19): latency. The split bar merged into ~7 calls a frame (one polygon per colour and baseline,
     # up to 58 points: run 4 never sent more than 18), then wider windows. --log stamps every tx/rx with t=ms.
@@ -191,6 +140,25 @@ STEPS = {
                ["--draw-parked", "--trace", "pull", "--layout", "split", "--flash-ms", "0", "--palette", "3,4,3,4,3,4,4",
                 "--shift-colour", "4", "--backs", "fill", "--in-flight", "16", "--log", "--seconds", "30"], 30,
                "Video: as W2?", ("handles", "canvas")),
+    # Car run 7 (stories hud-polish/red.md, speed-cameras): is there a red in the palette with Sport selected, and the camera alert.
+    "P1": Step("swatch bars fill 0..23 with SPORT selected (does the palette follow the KOMBI design? JayJay3071)", "ours",
+               ["--swatches", "0", "--swatch-n", "8", "--swatch-pages", "3", "--show", "both", "--seconds", "8"], 30,
+               "Select SPORT first. Photo each page (8 s): page k shows 8k..8k+7 left to right. Is any bar red?",
+               ("handles", "canvas")),
+    "P1p": Step("as P1 with SPORT+ selected", "ours",
+                ["--swatches", "0", "--swatch-n", "8", "--swatch-pages", "3", "--show", "both", "--seconds", "8"], 30,
+                "Select SPORT+ first. Photo each page: is any bar red?", ("handles", "canvas")),
+    "K1": Step("camera alert, scripted: a camera passed at 90 km/h every 30 s, whole picture then with the bar, 60 s", "ours",
+               ["--draw-parked", "--scene", "cam", "--layout", "split", "--flash-ms", "0", "--palette", "3,4,3,4,3,4,4", "--shift-colour", "4", "--backs", "fill", "--in-flight", "32", "--pipeline", "--seconds", "60"], 60,
+               "Video: 0-30 s the whole picture (camera, limit sign, shrinking bar) from 4 s to 26 s; 30-60 s the bar with the "
+               "badge and the limit 50 in the revs' place from 34 s to 56 s. Readable? Anything garbled?", ("handles", "canvas")),
+    "K1r": Step("as K1 with the red from P1 (set red N)", "ours",
+                ["--draw-parked", "--scene", "cam", "--layout", "split", "--flash-ms", "0", "--palette", "3,4,3,4,3,4,4", "--shift-colour", "4", "--backs", "fill", "--in-flight", "32", "--pipeline", "--seconds", "60"], 60,
+                "Video: is the camera red? The limit and bar still white?", ("handles", "canvas", "red")),
+    "K2r": Step("Sport Bar pull with the red: lit 6000+ zone and the blinking gear in red, 40 s", "ours",
+                ["--draw-parked", "--trace", "pull", "--shift-hold", "2500", "--layout", "split", "--flash-ms", "0", "--palette", "3,4,3,4,3,4,4", "--shift-colour", "4", "--backs", "fill", "--in-flight", "32", "--pipeline", "--seconds", "40"], 40,
+                "Video: the top zone red when lit, the gear red while it blinks past 6400, all else as today?",
+                ("handles", "canvas", "red")),
 }
 SETTABLE = {
     "palette": re.compile(r"(default|\d{1,3}(,\d{1,3}){6})"),
@@ -198,6 +166,7 @@ SETTABLE = {
     "handles": re.compile(r"\d{1,3},\d{1,3}"),
     "inst": re.compile(r"\d{1,2}"),
     "container": re.compile(r"\d{1,3}"),
+    "red": re.compile(r"\d{1,3}"),   # the fill index that showed red (P1)
 }
 
 
@@ -232,6 +201,8 @@ def worker_args(step, state):
     if (state.get("palette") not in (None, "default") and "--palette" not in args
             and ("--draw-parked" in args or "--grid" in args)):
         args += ["--palette", state["palette"]]
+    if state.get("red") and "--red" not in args and "red" in step.needs:
+        args += ["--red", state["red"]]
     return args
 
 

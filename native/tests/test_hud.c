@@ -1,17 +1,17 @@
-#include "hud/hud_nav.h"
-#include "hud/hud_nav_demo.h"
 #include "hud/hud_proto.h"
 #include "hud/hud_scene.h"
 #include "hud/hud_sender.h"
 #include "hud/hud_app.h"
 #include "hud/hud_gear.h"
 #include "hud/hud_cds.h"
+#include "hud/hud_cam.h"
 #include "drive_frame.h"
 #include <stdlib.h>
 #include <sys/stat.h>
 #include <unistd.h>
 #include "hud/hud_strip.h"
 #include <assert.h>
+#include <math.h>
 #include <stdio.h>
 #include <string.h>
 
@@ -79,10 +79,10 @@ static void test_fields(void) {
     double lo, hi;
     int i;
     hud_profile_b58(&p);
-    /* Owner, 2026-11-18: low 1000-5000, middle 5000-6000, tallest 6000 to the 7000 redline; the zones follow the end. */
+    /* Owner, 2026-11-18: low 0-5000 (from 0 since 2026-11-19, was 1000), middle 5000-6000, tallest 6000 to the 7000 redline; the zones follow the end. */
     assert(p.shift == 7000 && p.yellow == 5000 && p.red == 6000);
     hud_field_span(&p, 0, &lo, &hi);
-    assert(lo == 1000 && hi > 1666 && hi < 1667);
+    assert(lo == 0 && hi > 833 && hi < 834);
     hud_field_span(&p, 5, &lo, &hi);
     assert(hi == 5000);
     hud_field_span(&p, 6, &lo, &hi);
@@ -136,10 +136,19 @@ static void test_frames(void) {
     hud_batch b;
     int shown = 0, worst = 0, n, rpm, gear;
     uint32_t t;
-    hud_profile_b58(&p); hud_palette_default(&pal); hud_geom_default(&g); hud_handles_default(&h);
+    hud_profile_b58(&p); hud_palette_default(&pal); hud_handles_default(&h);
+    hud_geom_split(&g, 120, 72);
+    g.merge_pts = 0;   /* one polygon per outline and no RPM readout, so the counts below read field by field */
+    g.rpm_h = 0;
 
-    /* The default palette draws every unlit field grey: one colour change for the twelve. */
+    /* Owner 2026-11-19: the bar fills from 0, so idle (800) lights most of the first field and nothing else. */
     steady(&a, 800, 10000);
+    {
+        hud_strip_key k = hud_strip_key_of(&p, &g, &a);
+        assert(k.full == 0 && k.partial_px > 0);
+    }
+    /* The default palette draws every unlit field grey: one colour change for the twelve. */
+    steady(&a, 0, 10000);
     hud_batch_init(&b);
     assert(hud_strip_frame(&b, &p, &pal, &g, &h, &a, &shown) == 1 + 1 + 12 + 1);
     shown = 0;
@@ -197,7 +206,7 @@ static void test_frames(void) {
        are text areas. */
     h.static_backs = 1;
     h.static_h = 7;
-    steady(&a, 3000, 10000);
+    steady(&a, 2500, 10000);   /* three fields exactly */
     hud_batch_init(&b);
     n = hud_strip_frame(&b, &p, &pal, &g, &h, &a, &shown);
     assert(count(&b, HUD_POLYGON) == 2 + 1 && n == 1 + 1 + 3 + 1);
@@ -220,13 +229,8 @@ static void test_frames(void) {
     hud_batch_init(&b);
     assert(hud_swatches(&b, 5, &g, 0) == 33 && b.call[1].p[2] == 0 && b.call[31].p[2] == 15);
 
-    /* The layout scales with the canvas. */
-    hud_geom_for_canvas(&g, 960, 360);
-    assert(g.x == 516 && g.w == 416 && g.gear_h == 88);
-
-    /* Run 2: on the HUD's 120x72 image the scaled layout used x 64..116, y 22..34. The big one fills it, peak marker
-       and gear digit included, and every frame still fits a batch. */
-    hud_geom_big(&g, 120, 72);
+    /* The split layout fills the HUD's 120x72 image (run 2: 82/02 31/32), peak marker, gear and RPM included, and
+       every frame stays inside it. */
     hud_handles_default(&h);   /* backs drawn every frame, as on the car */
     assert(g.x + g.w <= 120 && g.w >= 110 && g.y - 8 >= 0 && g.gear_top > g.y + g.h);
     assert(g.gear_top + g.gear_h <= 72 && g.gear_h >= 28);
@@ -241,7 +245,7 @@ static void test_frames(void) {
         }
     /* Run 3: yellow and red came out the same orange on the HUD (no red index), so the zones differ in height:
        at idle every field is drawn, base lowest, red tallest. */
-    steady(&a, 800, 10000);
+    steady(&a, 0, 10000);
     a.gear = 0;
     hud_batch_init(&b);
     hud_strip_frame(&b, &p, &pal, &g, &h, &a, &shown);
@@ -275,22 +279,22 @@ static void test_frames(void) {
     pal.shift_on = 4;
     pal.backs = HUD_BACKS_NONE;
     p.flash_ms = 0;
-    steady(&a, 800, 10000); a.gear = 0;
+    steady(&a, 0, 10000); a.gear = 0;
     hud_batch_init(&b);
     assert(hud_strip_frame(&b, &p, &pal, &g, &h, &a, &shown) == 2);          /* idle: RemoveAll + switch, nothing lit */
     steady(&a, 6200, 10000); a.gear = 3;
     hud_batch_init(&b);
     hud_strip_frame(&b, &p, &pal, &g, &h, &a, &shown);
-    assert(count(&b, HUD_FILL_COLOR) == 2 && count(&b, HUD_POLYGON) == 9 + 1 + 5);   /* 3 for fields, 4 for the "3" */
+    assert(count(&b, HUD_FILL_COLOR) == 2 && count(&b, HUD_POLYGON) == 9 + 1 + 1);   /* 3 for fields, 4 for the "3" */
     steady(&a, 7100, 10000); a.gear = 3;   /* steady() resets the gear */
     hud_batch_init(&b);
     hud_strip_frame(&b, &p, &pal, &g, &h, &a, &shown);
     for (n = 0; n < (int)b.n; n++)
         if (b.call[n].fkt == HUD_FILL_COLOR) assert(b.call[n].p[2] == 4);   /* bar and digit white */
-    assert(count(&b, HUD_POLYGON) == 12 + 5);
+    assert(count(&b, HUD_POLYGON) == 12 + 1);
     /* Outline backs: line width 1, line colour base_off, fill 0, then the unlit fields. */
     pal.backs = HUD_BACKS_OUTLINE;
-    steady(&a, 800, 10000); a.gear = 0;
+    steady(&a, 0, 10000); a.gear = 0;
     hud_batch_init(&b);
     hud_strip_frame(&b, &p, &pal, &g, &h, &a, &shown);
     assert(b.call[1].fkt == HUD_LINE_WIDTH && b.call[2].fkt == HUD_LINE_COLOR && b.call[2].p[2] == pal.base_off);
@@ -333,42 +337,33 @@ static void test_scene(void) {
     hud_settings_default(&s);
     assert(s.shift_rpm == 7000);
     memset(&st, 0, sizeof st);
-#define SCENE(sb, al, nv, mode_, route) (s.sport_bar = sb, s.always = al, s.nav = nv, st.mode = mode_, st.route_active = route, hud_scene_select(&s, &st))
-    /* The table in menu-spec.md. */
-    assert(SCENE(1, 0, 1, HUD_MODE_SPORT, 1) == HUD_SCENE_RPM);
-    assert(SCENE(1, 0, 1, HUD_MODE_SPORT_PLUS, 0) == HUD_SCENE_RPM);
-    assert(SCENE(1, 0, 1, HUD_MODE_COMFORT, 1) == HUD_SCENE_NAV);
-    assert(SCENE(1, 0, 1, HUD_MODE_ECO_PRO, 0) == HUD_SCENE_NONE);
-    assert(SCENE(1, 0, 0, HUD_MODE_SPORT, 1) == HUD_SCENE_RPM);
-    assert(SCENE(1, 0, 0, HUD_MODE_COMFORT, 1) == HUD_SCENE_NONE);
-    assert(SCENE(1, 1, 1, HUD_MODE_COMFORT, 1) == HUD_SCENE_RPM);
-    assert(SCENE(1, 1, 0, HUD_MODE_ECO_PRO, 0) == HUD_SCENE_RPM);
-    assert(SCENE(0, 1, 1, HUD_MODE_SPORT, 1) == HUD_SCENE_NAV);
-    assert(SCENE(0, 0, 1, HUD_MODE_COMFORT, 1) == HUD_SCENE_NAV);
-    assert(SCENE(0, 0, 0, HUD_MODE_SPORT, 1) == HUD_SCENE_NONE);
+#define SCENE(sb, al, mode_) (s.sport_bar = sb, s.always = al, st.mode = mode_, hud_scene_select(&s, &st))
+    /* The table in menu-spec.md, without Navigation (feature/nav branch). */
+    assert(SCENE(1, 0, HUD_MODE_SPORT) == HUD_SCENE_RPM);
+    assert(SCENE(1, 0, HUD_MODE_SPORT_PLUS) == HUD_SCENE_RPM);
+    assert(SCENE(1, 0, HUD_MODE_COMFORT) == HUD_SCENE_NONE);
+    assert(SCENE(1, 0, HUD_MODE_ECO_PRO) == HUD_SCENE_NONE);
+    assert(SCENE(1, 1, HUD_MODE_COMFORT) == HUD_SCENE_RPM);
+    assert(SCENE(1, 1, HUD_MODE_ECO_PRO) == HUD_SCENE_RPM);
+    assert(SCENE(0, 1, HUD_MODE_SPORT) == HUD_SCENE_NONE);
     /* An unreadable driving mode behaves as Comfort. */
-    assert(SCENE(1, 0, 1, HUD_MODE_UNKNOWN, 1) == HUD_SCENE_NAV);
-    assert(SCENE(1, 0, 0, HUD_MODE_UNKNOWN, 1) == HUD_SCENE_NONE);
+    assert(SCENE(1, 0, HUD_MODE_UNKNOWN) == HUD_SCENE_NONE);
     /* The factory navigation always wins. */
     st.factory_nav = 1;
-    assert(SCENE(1, 1, 1, HUD_MODE_SPORT, 1) == HUD_SCENE_NONE);
+    assert(SCENE(1, 1, HUD_MODE_SPORT) == HUD_SCENE_NONE);
     st.factory_nav = 0;
-    /* Sport keeps the bar whatever the route does: navigation never interrupts it. */
-    assert(SCENE(1, 0, 1, HUD_MODE_SPORT_PLUS, 1) == HUD_SCENE_RPM);
 #undef SCENE
-    /* "Always" pauses Navigation without unticking it. */
-    s.sport_bar = 1; s.always = 1; s.nav = 1;
-    assert(hud_nav_paused_reason(&s) && s.nav == 1);
-    s.always = 0;
-    assert(!hud_nav_paused_reason(&s));
 
     /* Settings file. */
     hud_settings_default(&s);
-    assert(hud_settings_parse(&s, "always=1\r\nnav=0\nshift_rpm=6500\nbogus=3\nsport_bar=7\n", 49) == 3);
-    assert(s.always == 1 && s.nav == 0 && s.shift_rpm == 6500 && s.sport_bar == 1);
+    /* nav=, lang=, text= and street_max= are left in the car's settings.txt from the nav builds: ignored */
+    assert(hud_settings_parse(&s, "always=1\r\nnav=0\nshift_rpm=6500\nbogus=3\nsport_bar=7\nlang=en\nstreet_max=24\n", 71) == 2);
+    assert(s.always == 1 && s.shift_rpm == 6500 && s.sport_bar == 1);
     assert(hud_settings_parse(&s, "shift_rpm=99999\n", 16) == 0 && s.shift_rpm == 6500);
-    assert(hud_settings_parse(&s, "lang=en\ntext=latin\nstreet_max=24\ntext=nativ\nlang=xx\nstreet_max=99\nturns_in_sport=1\n", 83) == 3);
-    assert(s.text.lang == HUD_LANG_EN && s.text.script == HUD_SCRIPT_LATIN && s.text.street_max == 24);
+    /* the camera warning: on, 500 m, white by default; the menu's distances and the orange */
+    assert(s.cameras == 1 && s.cam_dist == 500 && s.cam_orange == 0);
+    assert(hud_settings_parse(&s, "cam_dist=800\ncam_orange=1\ncam_dist=5000\ncam_orange=2\ncameras=0\n", 63) == 3);
+    assert(s.cam_dist == 800 && s.cam_orange == 1 && s.cameras == 0);
     /* the latency knobs (car run 6 tunes them by hand): a window of 1..16, merging -1 (the layout's) .. 99 */
     assert(s.in_flight == 32 && s.merge_pts == -1 && s.blink_rpm == 6400);
     assert(hud_settings_parse(&s, "blink_rpm=6600\n", 15) == 1 && s.blink_rpm == 6600);
@@ -536,212 +531,13 @@ static void check_polygons(const hud_batch *b, const hud_geom *g) {
             for (j = i + 2; j < n; j++) {
                 if (i == 0 && j == n - 1) continue;
                 if (crosses(q[i], q[(i + 1) % n], q[j], q[(j + 1) % n])) {
-                    fprintf(stderr, "polygon %u crosses itself at edges %d and %d (n %d, canvas %dx%d, big %d)\n", c, i, j, n, g->canvas_w, g->canvas_h, g->nav_x0);
+                    fprintf(stderr, "polygon %u crosses itself at edges %d and %d (n %d, canvas %dx%d, big %d)\n", c, i, j, n, g->canvas_w, g->canvas_h, g->rise);
                     for (i = 0; i < n; i++) fprintf(stderr, " %d,%d", q[i].x, q[i].y);
                     fprintf(stderr, "\n");
                     assert(0);
                 }
             }
     }
-}
-
-static void test_text(void) {
-    hud_text_style s;
-    char o[HUD_TEXT_BYTES];
-    hud_text_style_default(&s);
-#define STREET(in, want) (hud_text_street(in, &s, o, sizeof o), strcmp(o, want) ? fprintf(stderr, "got [%s] want [%s]\n", o, want), 0 : 1)
-    /* abbreviations, the dot cut, house numbers */
-    assert(STREET("вулиця Хрещатик", "вул. Хрещатик"));
-    assert(STREET("вул. Велика Васильківська", "вул. Велика Васильк."));
-    assert(STREET("вул. Сагайдачного, 25", "вул. Сагайдачного 25"));
-    assert(STREET("просп. Перемоги, 123-А", "просп. Перем. 123-А"));
-    assert(STREET("Hauptstraße 12", "Hauptstr. 12"));
-    assert(STREET("Avenue des Champs-Élysées", "Ave des Champs-Élys."));
-    assert(STREET("12345678901234567890123", "1234567890123456789."));
-    /* invisible, decomposed, typographic and non-BMP characters */
-    assert(STREET("вулиця\xC2\xA0\xC2\xAB\xD0\x9A\xD0\xB8\xD1\x96\xCC\x88\xD0\xB2\xD1\x81\xD1\x8C\xD0\xBA\xD0\xB0\xC2\xBB\xE2\x80\x8E  ",
-                  "вул. \"Київська\""));
-    assert(STREET("\xF0\x9F\x9A\xA7 Обхід", "Обхід"));
-    assert(STREET("a\xFF\xFE b\xE0\x80\xAF c\t\n", "a b c"));
-    assert(STREET("", ""));
-    /* Latin: the national transliteration, capitals, the apostrophe, other scripts dropped */
-    s.script = HUD_SCRIPT_LATIN;
-    assert(STREET("просп. Берестейський", "prosp. Beresteiskyi"));
-    assert(STREET("Згурівка", "Zghurivka"));
-    assert(STREET("Мар'янівка", "Marianivka"));
-    assert(STREET("Їжакевича", "Yizhakevycha"));
-    assert(STREET("ЩОРСА", "SHCHORSA"));
-    assert(STREET("Kärntner Straße 1", "Karntner Str. 1"));
-    assert(STREET("Λεωφόρος Συγγρού", ""));
-    /* every output fits a text area, whatever the input */
-    {
-        char big[600];
-        int i;
-        for (i = 0; i < 599; i++) big[i] = (char)(i % 3 == 0 ? 0xD0 : i % 3 == 1 ? 0x96 : ' ');
-        big[599] = 0;
-        for (s.street_max = 8; s.street_max <= 32; s.street_max++) {
-            hud_batch b;
-            hud_batch_init(&b);
-            assert(hud_text_street(big, &s, o, sizeof o) <= s.street_max && hud_text_utf8(&b, 2, o) == 0);
-            s.script = !s.script;
-        }
-    }
-    hud_text_style_default(&s);
-#undef STREET
-#define DIST(d, arrive, want) (hud_text_distance(d, arrive, &s, o, sizeof o), strcmp(o, want) ? fprintf(stderr, "got [%s] want [%s]\n", o, want), 0 : 1)
-    assert(DIST(447, 0, "450 м") && DIST(296, 0, "300 м") && DIST(994, 0, "1.0 км") && DIST(1234, 0, "1.2 км"));
-    assert(DIST(12345, 0, "12 км") && DIST(3, 0, "Зараз") && DIST(-5, 0, "Зараз") && DIST(20, 1, "Ви прибули"));
-    assert(DIST(80, 1, "80 м"));
-    s.lang = HUD_LANG_EN;
-    assert(DIST(1234, 0, "1.2 km") && DIST(20, 1, "Arrived"));
-    s.lang = HUD_LANG_UK; s.script = HUD_SCRIPT_LATIN;
-    assert(DIST(1234, 0, "1.2 km") && DIST(20, 1, "Vy prybuly"));
-#undef DIST
-}
-
-/* Canvases 0..4 scale the default layout; 5 is the HUD's 120x72 image (82/02 31/32) with the big layout (run 3), 6 the
-   same with the HUD's own texts over the image top (run 4 T3). */
-#define NCANVAS 7
-static void set_canvas(hud_geom *g, int c)
-{
-    static const int k[][2] = { { 480, 180 }, { 400, 150 }, { 640, 240 }, { 320, 180 }, { 480, 120 }, { 120, 72 }, { 120, 72 } };
-    if (c >= 5) hud_geom_big(g, k[c][0], k[c][1]);
-    else hud_geom_for_canvas(g, k[c][0], k[c][1]);
-    g->nav_text_top = c == 6;
-}
-
-/* The lowest polygon top in the batch (canvas px). */
-static int top_y(const hud_batch *b) {
-    unsigned c;
-    int i, t = 1 << 30;
-    for (c = 0; c < b->n; c++) {
-        const hud_call *k = &b->call[c];
-        if (k->fkt != HUD_POLYGON) continue;
-        for (i = 0; i < k->p[5]; i++) {
-            int y = (int16_t)(k->p[8 + 4 * i] << 8 | k->p[9 + 4 * i]);
-            if (y < t) t = y;
-        }
-    }
-    return t;
-}
-
-static void test_nav(void) {
-    static const char *const k_routes[] = { "ua", "intl" };
-    hud_palette pal; hud_geom g; hud_handles h; hud_text_handles th;
-    hud_text_style ts;
-    hud_nav_info n;
-    hud_nav_sent sent;
-    hud_batch b;
-    int r, c, sc, i, d, shown = 0, worst = 0, k;
-    hud_palette_default(&pal); hud_geom_default(&g); hud_handles_default(&h); hud_text_handles_default(&th);
-    hud_text_style_default(&ts);
-    assert(th.street == 2 && th.distance == 3);
-
-    /* Car probes: the 6WB form of ImageGetSize, and the visible-area grid on every canvas. */
-    hud_batch_init(&b);
-    assert(hud_get_size_6wb(&b, 0x23) == 0 && b.call[0].len == 3 && b.call[0].p[2] == 1 && hud_call_valid(&b.call[0]));
-    for (c = 0; c < NCANVAS; c++) {
-        set_canvas(&g, c);
-        hud_batch_init(&b);
-        assert(hud_grid(&b, 6, &g, 4) == 34);
-        check_polygons(&b, &g);
-    }
-    hud_geom_default(&g);
-
-    /* Every step of both routes, at every distance, on every canvas, in both scripts: fits one batch, and every
-       polygon is simple and on the canvas. */
-    for (r = 0; r < 2; r++) {
-        assert(hud_nav_demo_use(k_routes[r]) == 0);
-        for (c = 0; c < NCANVAS; c++)
-            for (sc = 0; sc < 2; sc++) {
-                set_canvas(&g, c);
-                ts.script = sc;
-                for (i = 0; i < hud_nav_demo_count(); i++)
-                    for (d = 0; d <= 1500; d += 50) {
-                        hud_nav_demo_get(i, d, &n);
-                        memset(&sent, 0, sizeof sent);
-                        hud_batch_init(&b);
-                        k = hud_nav_frame(&b, &n, &pal, &g, &h, &th, &ts, &sent, &shown);
-                        assert(k > 0 && k <= HUD_MAX_CALLS);
-                        check_polygons(&b, &g);
-                        if (c == 6) assert(top_y(&b) >= 72 * 58 / 180 - 1);   /* clear of the distance text */
-                        if (k > worst) worst = k;
-                    }
-            }
-    }
-    printf("worst nav frame: %d calls\n", worst);
-    assert(hud_nav_demo_use("ua") == 0 && hud_nav_demo_use("nope") == -1);
-    hud_geom_default(&g);
-    ts.script = HUD_SCRIPT_NATIVE;
-
-    /* Every manoeuvre, every roundabout exit and angle, every lane combination and highlight stays simple, even all
-       six arrows in one lane, on every canvas. */
-    hud_nav_demo_get(0, 300, &n);
-    for (i = 0; i < 64 * NCANVAS; i++) {
-        set_canvas(&g, i % NCANVAS);
-        n.man = (enum hud_maneuver)(i % HUD_MAN_COUNT);
-        n.exit = i % 8;
-        n.exit_angle = (i * 15) % 375;
-        n.nlanes = HUD_MAX_LANES;
-        for (d = 0; d < HUD_MAX_LANES; d++) {
-            n.lane[d].arrows = (uint8_t)((i + d * 11) % 64);
-            n.lane[d].kind = (uint8_t)(d % 3);
-            n.lane[d].recommended = (uint8_t)(d & 1);
-            n.lane[d].use = (uint8_t)((i * 7 + d) % 64);
-        }
-        memset(&sent, 0, sizeof sent);
-        hud_batch_init(&b);
-        assert(hud_nav_frame(&b, &n, &pal, &g, &h, &th, &ts, &sent, &shown) > 0);
-        check_polygons(&b, &g);
-    }
-    hud_geom_default(&g);
-    n.exit_angle = 0;
-
-    /* First frame: both texts, then clear / draw / switch. The same state again sends nothing. */
-    hud_nav_demo_get(0, 500, &n);
-    memset(&sent, 0, sizeof sent);
-    shown = 0;
-    hud_batch_init(&b);
-    hud_nav_frame(&b, &n, &pal, &g, &h, &th, &ts, &sent, &shown);
-    assert(b.call[0].fkt == HUD_TEXT && hud_call_handle(&b.call[0]) == 2);
-    assert(b.call[1].fkt == HUD_TEXT && hud_call_handle(&b.call[1]) == 3);
-    assert(b.call[2].fkt == HUD_REMOVE_ALL && last(&b)->fkt == HUD_SWITCH_VISIBILITY && shown == 1);
-    hud_batch_init(&b);
-    assert(hud_nav_frame(&b, &n, &pal, &g, &h, &th, &ts, &sent, &shown) == 0);
-    /* 50 m closer (50 m steps above 300 m): the distance text changes; the bar may or may not move a pixel. */
-    n.dist_m = 450;
-    hud_batch_init(&b);
-    assert(hud_nav_frame(&b, &n, &pal, &g, &h, &th, &ts, &sent, &shown) >= 1 && b.call[0].fkt == HUD_TEXT &&
-           hud_call_handle(&b.call[0]) == 3);
-    /* A new street resends the street. */
-    hud_nav_demo_get(1, 500, &n);
-    hud_batch_init(&b);
-    hud_nav_frame(&b, &n, &pal, &g, &h, &th, &ts, &sent, &shown);
-    assert(b.call[0].fkt == HUD_TEXT && hud_call_handle(&b.call[0]) == 2);
-    /* A street far over 32 characters still draws (it used to fail the whole frame). */
-    memset(n.street, 'x', sizeof n.street - 1);
-    n.street[sizeof n.street - 1] = 0;
-    hud_batch_init(&b);
-    assert(hud_nav_frame(&b, &n, &pal, &g, &h, &th, &ts, &sent, &shown) > 0);
-    /* With texts already in a nearly full batch, the lanes give way instead of the frame failing. */
-    hud_nav_demo_use("intl");
-    hud_nav_demo_get(0, 300, &n);
-    memset(&sent, 0, sizeof sent);
-    hud_batch_init(&b);
-    for (i = 0; i < 26; i++) hud_fill_color(&b, 9, 1);
-    assert(hud_nav_frame(&b, &n, &pal, &g, &h, &th, &ts, &sent, &shown) > 0 && b.n <= HUD_MAX_CALLS);
-    hud_nav_demo_use("ua");
-    /* Clearing empties both texts. */
-    hud_batch_init(&b);
-    assert(hud_nav_clear(&b, &th, &sent) == 2 && b.call[0].len == 5 && !sent.have_text);
-
-    /* The demo walks the steps and counts down. */
-    hud_nav_demo_at(0, &n);
-    assert(n.man == HUD_MAN_LEFT && n.dist_m == n.total_m);
-    hud_nav_demo_at(8500, &n);
-    assert(n.dist_m == 0);
-    hud_nav_demo_at(9000, &n);
-    assert(n.man == HUD_MAN_STRAIGHT);
 }
 
 static void test_gear(void) {
@@ -798,7 +594,6 @@ static void test_gear(void) {
     assert(hud_live_gate(HUD_SCENE_RPM, 0, 1) == HUD_SCENE_NONE);    /* engine off */
     assert(hud_live_gate(HUD_SCENE_RPM, 820, 0) == HUD_SCENE_NONE);  /* P, N, R or a value not mapped yet */
     assert(hud_live_gate(HUD_SCENE_RPM, -1, 3) == HUD_SCENE_NONE);   /* no fresh revs */
-    assert(hud_live_gate(HUD_SCENE_NAV, 0, 0) == HUD_SCENE_NAV);     /* the nav scene doesn't need the engine */
 }
 
 
@@ -838,23 +633,30 @@ static void test_app(void) {
     int argc, i, found = 0;
     assert(mkdtemp(dir));
     hud_app_load(&s, dir);                                  /* no file: the installed defaults */
-    assert(s.sport_bar == 1 && s.always == 1 && s.nav == 1 && hud_app_wants_worker(&s));
+    assert(s.sport_bar == 1 && s.always == 1 && s.cameras == 1 && s.cam_dist == 500 && hud_app_wants_worker(&s));
     hud_app_toggle(&s, HUD_APP_ALWAYS);
     s.shift_rpm = 6400;
     assert(hud_app_save(&s, dir) == 0);
     hud_app_load(&r, dir);
-    assert(r.sport_bar == 1 && r.always == 0 && r.nav == 1 && r.shift_rpm == 6400);
+    assert(r.sport_bar == 1 && r.always == 0 && r.cameras == 1 && r.shift_rpm == 6400);
     snprintf(path, sizeof path, "%s/settings.txt.new", dir);
     assert(access(path, F_OK) != 0);                        /* no temporary file left */
     hud_app_toggle(&r, HUD_APP_SPORT_BAR);
     hud_app_toggle(&r, HUD_APP_ALWAYS);                     /* greyed out: no effect while Sport Bar is off */
     assert(r.always == 0);
-    hud_app_toggle(&r, HUD_APP_NAV);
-    assert(!hud_app_wants_worker(&r));
+    assert(hud_app_wants_worker(&r));                       /* the camera warning alone keeps the worker */
+    hud_app_status(&r, 1, NULL, 0, st, sizeof st);
+    assert(!strcmp(st, "Running: camera warning only"));
+    hud_app_toggle(&r, HUD_APP_CAMERAS);
+    hud_app_toggle(&r, HUD_APP_CAM_ORANGE);                 /* greyed out: no effect while the warning is off */
+    assert(r.cameras == 0 && r.cam_orange == 0 && !hud_app_wants_worker(&r));
     hud_app_status(&r, 0, NULL, 0, st, sizeof st);
     assert(!strcmp(st, "Off"));
+    hud_app_toggle(&r, HUD_APP_CAMERAS);
+    hud_app_toggle(&r, HUD_APP_CAM_ORANGE);
+    assert(r.cameras == 1 && r.cam_orange == 1);
     hud_app_status(&s, 1, NULL, 0, st, sizeof st);
-    assert(strstr(st, "Sport and Sport+"));   /* run 6: the driving mode comes from CDS */
+    assert(strstr(st, "Sport and Sport+") && strstr(st, "camera"));   /* run 6: the driving mode comes from CDS */
     hud_app_status(&s, 1, "HudTest", 0, st, sizeof st);
     assert(strstr(st, "HudTest"));
 
@@ -872,6 +674,50 @@ static void test_app(void) {
         assert(b.blink_rpm == 6600);
         hud_app_blink_label(&b, label, sizeof label);
         assert(!strcmp(label, "Gear blinks from 6,600 RPM"));
+        /* The Warning distance page: 300, 500, 800 m (owner 2026-11-20), 500 by default. */
+        hud_app_set_cam_dist(&b, 0);
+        assert(b.cam_dist == 300);
+        hud_app_set_cam_dist(&b, 2);
+        hud_app_set_cam_dist(&b, 3);
+        assert(b.cam_dist == 800);
+        hud_app_cam_dist_label(&b, label, sizeof label);
+        assert(!strcmp(label, "Warning from 800 m before the camera"));
+    }
+    /* The App information page: the release from the build, the camera list's country, size and date from cameras.txt */
+    {
+        char label[128], line[256];
+        const char *txt = "# ExtendedHUD speed cameras\n# country Ukraine\n# iso UA\n# date 2026-11-19\n# 3 fixed\n50.1 30.2 50 10\n"
+                          "  50.2 30.3 110 -1\r\n\n50.3 30.4 50 200\n";
+        hud_cams_meta m;
+        FILE *f;
+        memset(&m, 0, sizeof m);
+        hud_app_cameras_line(&m, "# date 2026-11-19\r\n");
+        hud_app_cameras_line(&m, "# country United Kingdom \n");
+        hud_app_cameras_line(&m, "# iso GB\n");
+        hud_app_cameras_line(&m, "# date 19.11.2026\n");              /* not YYYY-MM-DD: ignored */
+        hud_app_cameras_line(&m, "51.5 -0.1 30 90");
+        assert(m.count == 1 && !strcmp(m.date, "2026-11-19") && !strcmp(m.country, "United Kingdom") && !strcmp(m.iso, "GB"));
+        hud_app_version_label(label, sizeof label);
+        assert(!strcmp(label, "Version " HUD_APP_VERSION ", released " HUD_APP_RELEASED));
+        hud_app_cameras_label(dir, label, sizeof label);
+        assert(!strcmp(label, "Speed cameras: no list installed"));
+        snprintf(path, sizeof path, "%s/cameras.txt", dir);
+        assert((f = fopen(path, "w")) && fputs(txt, f) >= 0 && fclose(f) == 0);
+        hud_app_cameras_label(dir, label, sizeof label);
+        assert(!strcmp(label, "Speed cameras: UA-3-2026-11-19"));   /* one short line: the page cuts long text (car run 8) */
+        assert((f = fopen(path, "w")) && fputs("# country Ukraine\n# date 2026-11-19\n50.1 30.2 50 10\n", f) >= 0 && fclose(f) == 0);
+        hud_app_cameras_label(dir, label, sizeof label);
+        assert(!strcmp(label, "Speed cameras: Ukraine-1-2026-11-19"));   /* a list from before "# iso" */
+        assert((f = fopen(path, "w")) && fputs("50.1 30.2 50 10\n", f) >= 0 && fclose(f) == 0);
+        hud_app_cameras_label(dir, label, sizeof label);
+        assert(!strcmp(label, "Speed cameras: ?-1-?"));
+        remove(path);
+        /* the shipped list names its country and date (tools/cameras_build.py) */
+        memset(&m, 0, sizeof m);
+        assert((f = fopen("plugin/cameras.txt", "r")));
+        while (fgets(line, sizeof line, f)) hud_app_cameras_line(&m, line);
+        fclose(f);
+        assert(m.count > 0 && strlen(m.date) == 10 && m.country[0] && strlen(m.iso) == 2);   /* any country (update-speedcam-db) */
     }
     argc = hud_app_worker_argv(HUD_APP_DIR, "169.254.21.3", buf, sizeof buf, argv, HUD_APP_MAX_ARGS);
     assert(argc > 10 && argv[argc] == NULL);
@@ -885,9 +731,10 @@ static void test_app(void) {
         if (!strcmp(argv[i], "--collector")) { assert(!strcmp(argv[i + 1], HUD_APP_DIR "/shift-deck-qnx")); found |= 2; }
         if (!strcmp(argv[i], "--host")) { assert(!strcmp(argv[i + 1], "169.254.21.3")); found |= 4; }
         if (!strcmp(argv[i], "--most-inst")) { assert(!strcmp(argv[i + 1], "2")); found |= 8; }
-        assert(strcmp(argv[i], "--text-clear"));
+        if (!strcmp(argv[i], "--cameras")) { assert(!strcmp(argv[i + 1], HUD_APP_DIR "/cameras.txt")); found |= 64; }
+        assert(strcmp(argv[i], "--text-clear") && strcmp(argv[i], "--text-visible"));   /* no nav in this build */
     }
-    assert(found == 63);
+    assert(found == 127);
     assert(hud_app_worker_argv(HUD_APP_DIR, "x", buf, 20, argv, HUD_APP_MAX_ARGS) == -1);
 
     assert(hud_app_conflict(dir) == NULL);
@@ -928,6 +775,28 @@ static void raster(const hud_batch *b, int w, int h, unsigned char *px) {
             for (x = 0; x < w; x++)
                 if (inside(q, k->p[5], x, y)) px[y * w + x] = (unsigned char)colour;
     }
+}
+
+/* Car run 7 (2026-11-19): a polygon painted over another one did not show on the HUD (the partly lit field stayed dark).
+   Returns how many pixels more than one polygon of the batch paints. */
+static int overlap_px(const hud_batch *b, int w, int h) {
+    static unsigned char hits[480 * 180];
+    unsigned c;
+    int i, x, y, n = 0;
+    memset(hits, 0, sizeof hits);
+    for (c = 0; c < b->n; c++) {
+        const hud_call *k = &b->call[c];
+        hud_point q[HUD_MAX_POINTS];
+        if (k->fkt != HUD_POLYGON) continue;
+        for (i = 0; i < k->p[5]; i++) {
+            q[i].x = (int16_t)(k->p[6 + 4 * i] << 8 | k->p[7 + 4 * i]);
+            q[i].y = (int16_t)(k->p[8 + 4 * i] << 8 | k->p[9 + 4 * i]);
+        }
+        for (y = 0; y < h; y++)
+            for (x = 0; x < w; x++)
+                if (inside(q, k->p[5], x, y) && hits[y * w + x]++ == 1) n++;
+    }
+    return n;
 }
 
 /* Car run 6 W1-W3 (IMG_9797..9799): the HUD draws a polygon's edges too, so a join along a bottom line that crosses
@@ -1004,6 +873,15 @@ static void test_split(void) {
     hud_batch_init(&b);
     n = hud_strip_frame(&b, &p, &pal, &g, &h, &a, &shown);
     assert(count(&b, HUD_FILL_COLOR) == 2 && count(&b, HUD_POLYGON) == 7 && n == 1 + 2 + 7 + 1);
+    /* No polygon paints over another, at any revs (1500: the second field partly lit, car run 7). */
+    for (rpm = 0; rpm <= 7600; rpm += 25) {
+        steady(&a, rpm, 10000);
+        a.gear = 4;
+        a.peak = rpm + 300;
+        hud_batch_init(&b);
+        assert(hud_strip_frame(&b, &p, &pal, &g, &h, &a, &shown) > 0);
+        if (overlap_px(&b, 120, 72)) { fprintf(stderr, "overlap at %d rpm: %d px\n", rpm, overlap_px(&b, 120, 72)); assert(0); }
+    }
     /* ... and paints exactly what one polygon per outline paints, for every frame of the sweep below. */
     {
         static unsigned char one[120 * 72], merged[120 * 72];
@@ -1067,6 +945,411 @@ static void test_split(void) {
     }
 }
 
+/* ---- speed cameras (story speed-cameras, owner's rules 2026-11-19) ---- */
+
+/* A fix m metres north and e east of 50.45 N 30.50 E, heading h (-1 = take it from the track). */
+static hud_geo_fix fix_at(double north, double east, int h)
+{
+    hud_geo_fix f;
+    f.lat_e6 = 50450000 + (int32_t)(north * 1e6 / 111320.0);
+    f.lon_e6 = 30500000 + (int32_t)(east * 1e6 / (111320.0 * 0.63700));
+    f.heading = h;
+    f.valid = 1;
+    return f;
+}
+
+static hud_cam cam_at(double north, double east, int limit, int dir)
+{
+    hud_geo_fix f = fix_at(north, east, 0);
+    hud_cam c;
+    c.lat_e6 = f.lat_e6;
+    c.lon_e6 = f.lon_e6;
+    c.limit = (int16_t)limit;
+    c.dir = (int16_t)dir;
+    return c;
+}
+
+/* Drives north from `from` to `to` metres in 5 m steps; returns the distance shown at `at` (or -9999 if none then),
+   and the first and last positions where an alert was on. */
+static int g_show_m;   /* the menu's Warning distance for drive_north, 0 = the default */
+
+static int drive_north(const hud_cam *cams, int n, int from, int to, int heading, int at, int *on_from, int *on_to)
+{
+    hud_cam_track t;
+    int m, shown_at = -9999;
+    hud_cam_track_init(&t);
+    if (g_show_m) t.show_m = g_show_m;
+    *on_from = *on_to = -9999;
+    for (m = from; m <= to; m += 5) {
+        hud_geo_fix f = fix_at(m, 0, heading);
+        hud_cam_track_update(&t, cams, n, &f);
+        if (t.active) { if (*on_from == -9999) *on_from = m; *on_to = m; }
+        if (m == at && t.active) shown_at = t.dist_m;
+    }
+    return shown_at;
+}
+
+static void test_cameras(void)
+{
+    hud_cam cams[8];
+    int n, a, b, d;
+    const char *txt = "# lat lon limit dir\n50.479648646 30.453529090 50 123\n  50.4 30.5 110 -1\nbad line\n91 30 50 0\n"
+                      "50.5 30.6 70\n50.5 30.6 70 360\n";
+    n = hud_cams_parse(txt, strlen(txt), cams, 8);
+    assert(n == 3);
+    assert(cams[0].lat_e6 == 50479649 && cams[0].lon_e6 == 30453529 && cams[0].limit == 50 && cams[0].dir == 123);
+    assert(cams[1].limit == 110 && cams[1].dir == -1 && cams[2].dir == -1 && cams[2].limit == 70);
+
+    /* a camera 1000 m up the road on our (right) side, watching northbound: on from 500 m before to 50 m after */
+    cams[0] = cam_at(1000, 8, 50, 0);
+    d = drive_north(cams, 1, 0, 1200, 0, 700, &a, &b);
+    assert(a == 500 && b == 1050 && d >= 295 && d <= 305);
+    /* the menu's Warning distance (owner 2026-11-20): 300 m and 800 m before, still 50 m after */
+    g_show_m = 300;
+    drive_north(cams, 1, 0, 1200, 0, 700, &a, &b);
+    assert(a == 700 && b == 1050);
+    g_show_m = 800;
+    d = drive_north(cams, 1, 0, 1200, 0, 200, &a, &b);
+    assert(a == 200 && b == 1050 && d >= 795 && d <= 805);
+    g_show_m = 0;
+    /* the same camera watching southbound (the other carriageway's): never */
+    cams[0] = cam_at(1000, -8, 50, 180);
+    drive_north(cams, 1, 0, 1200, 0, 700, &a, &b);
+    assert(a == -9999);
+    /* a pair on an undivided road (the police list's 116 such cameras): only ours */
+    cams[0] = cam_at(1000, -9, 70, 180);
+    cams[1] = cam_at(1020, 9, 50, 0);
+    drive_north(cams, 2, 0, 1200, 0, 700, &a, &b);
+    assert(a == 520 && b == 1070);
+    {
+        hud_cam_track t;
+        hud_geo_fix f = fix_at(800, 0, 0);
+        hud_cam_track_init(&t);
+        assert(hud_cam_track_update(&t, cams, 2, &f) && t.active && t.idx == 1 && t.limit == 50);
+        f = fix_at(800, 0, -1);
+        f.valid = 0;   /* GPS gone stale: the alert ends */
+        assert(hud_cam_track_update(&t, cams, 2, &f) && !t.active);
+    }
+    /* no direction in the list: shown either way (until the open-data file gives one) */
+    cams[0] = cam_at(1000, 8, 90, -1);
+    drive_north(cams, 1, 0, 1200, 0, 700, &a, &b);
+    assert(a == 500);
+    /* a camera behind us or off to the side of our road: never */
+    cams[0] = cam_at(300, 200, 50, -1);
+    drive_north(cams, 1, 0, 1200, 0, 700, &a, &b);
+    assert(a == -9999);
+    /* no heading from CDS: the track gives one after 12 m */
+    cams[0] = cam_at(1000, 8, 50, 0);
+    drive_north(cams, 1, 0, 1200, -1, 700, &a, &b);
+    assert(a == 500 && b == 1050);
+    /* turning off before the camera: the alert ends once we are 60 m off its line */
+    {
+        hud_cam_track t;
+        int m;
+        hud_cam_track_init(&t);
+        for (m = 0; m <= 700; m += 5) { hud_geo_fix f = fix_at(m, 0, 0); hud_cam_track_update(&t, cams, 1, &f); }
+        assert(t.active);
+        for (m = 5; m <= 120 && t.active; m += 5) { hud_geo_fix f = fix_at(700, m, 90); hud_cam_track_update(&t, cams, 1, &f); }
+        assert(!t.active);
+    }
+    /* turning 90 deg onto a side street just 40 m before the camera: drops at once by direction, does not linger */
+    {
+        hud_cam_track t;
+        hud_geo_fix f = fix_at(960, 0, 0);
+        cams[0] = cam_at(1000, 8, 50, 0);
+        hud_cam_track_init(&t);
+        assert(hud_cam_track_update(&t, cams, 1, &f) && t.active);
+        f = fix_at(960, 15, 90);   /* across is 40 m (< 60), along is -7 m (> -50), but heading is 90 deg off dir 0 */
+        assert(hud_cam_track_update(&t, cams, 1, &f) && !t.active);
+    }
+    /* the track's own bearing is kept next to a CDS heading (car run 8 G1 logs both): driving east with a mirrored CDS 270 */
+    {
+        hud_cam_track t;
+        hud_geo_fix f = fix_at(0, 0, 270);
+        hud_cam_track_init(&t);
+        hud_cam_track_update(&t, cams, 0, &f);
+        assert(t.track_heading == -1 && t.heading == 270);
+        f = fix_at(0, 15, 270);
+        hud_cam_track_update(&t, cams, 0, &f);
+        assert(t.track_heading == 90 && t.heading == 270);
+        f = fix_at(0, 30, -1);   /* no CDS heading: the track's */
+        hud_cam_track_update(&t, cams, 0, &f);
+        assert(t.heading == 90);
+        f.valid = 0;
+        hud_cam_track_update(&t, cams, 0, &f);
+        assert(t.track_heading == -1 && t.heading == -1);
+    }
+    /* realistic GPS replay: Kyiv Pivnichnyi Bridge pair (eastbound row 6 = 65 deg vs westbound row 9 = 242 deg),
+       cross-street rejection, curved approach with derived heading, and consecutive cameras */
+    {
+        /* real coordinates and bearings from native/plugin/cameras.txt rows 6 and 9 */
+        hud_cam bridge[3] = {
+            { 50492109, 30540926, 50, 65 },    /* row 6 to left bank (ENE) */
+            { 50492322, 30540826, 50, 242 },   /* row 9 to right bank (WSW) */
+            { 50492109, 30540926, 70, 155 },   /* perpendicular cross-street at same spot */
+        };
+        hud_cam_track t;
+        int step, hit_idx = -1, hit_count = 0, first_d = -9999, last_d = -9999;
+        double rad = 65.0 * 3.14159265358979323846 / 180.0;
+        /* drive eastbound (bearing 65) from 700 m before row 6 to 150 m past, no CDS heading (derived from track) */
+        hud_cam_track_init(&t);
+        for (step = -700; step <= 150; step += 15) {
+            hud_geo_fix f;
+            double e = step * sin(rad), no = step * cos(rad);
+            f.lat_e6 = bridge[0].lat_e6 + (int32_t)(no * 1e6 / 111320.0);
+            f.lon_e6 = bridge[0].lon_e6 + (int32_t)(e * 1e6 / (111320.0 * cos(50.4921 * 3.14159265358979323846 / 180.0)));
+            f.heading = -1;
+            f.valid = 1;
+            hud_cam_track_update(&t, bridge, 3, &f);
+            if (t.active) {
+                if (hit_idx < 0) { hit_idx = t.idx; first_d = t.dist_m; }
+                assert(t.idx == 0);   /* never row 9 (oncoming) and never #2 (cross-street) */
+                last_d = t.dist_m;
+                hit_count++;
+            }
+        }
+        assert(hit_idx == 0 && hit_count > 20 && first_d >= 480 && first_d <= 505 && last_d <= -35 && last_d >= -55);
+        /* drive westbound (bearing 242): only row 9 fires */
+        hit_idx = -1; hit_count = 0;
+        rad = 242.0 * 3.14159265358979323846 / 180.0;
+        hud_cam_track_init(&t);
+        for (step = -700; step <= 150; step += 15) {
+            hud_geo_fix f;
+            double e = step * sin(rad), no = step * cos(rad);
+            f.lat_e6 = bridge[1].lat_e6 + (int32_t)(no * 1e6 / 111320.0);
+            f.lon_e6 = bridge[1].lon_e6 + (int32_t)(e * 1e6 / (111320.0 * cos(50.4923 * 3.14159265358979323846 / 180.0)));
+            f.heading = -1;
+            f.valid = 1;
+            hud_cam_track_update(&t, bridge, 3, &f);
+            if (t.active) {
+                if (hit_idx < 0) hit_idx = t.idx;
+                assert(t.idx == 1);
+                hit_count++;
+            }
+        }
+        assert(hit_idx == 1 && hit_count > 20);
+        /* two consecutive northbound cameras 800 m apart: first shows and clears, then second shows */
+        cams[0] = cam_at(1000, 8, 50, 0);
+        cams[1] = cam_at(1800, 8, 90, 0);
+        {
+            int seen0 = 0, seen1 = 0, m;
+            hud_cam_track_init(&t);
+            for (m = 0; m <= 2000; m += 10) {
+                hud_geo_fix f = fix_at(m, 0, 0);
+                hud_cam_track_update(&t, cams, 2, &f);
+                if (t.active && t.idx == 0) seen0++;
+                if (t.active && t.idx == 1) seen1++;
+            }
+            assert(seen0 > 40 && seen1 > 40);
+        }
+    }
+
+    /* the pictures: every call valid, every point on the 120 x 72 canvas, polygons within the 51-point size proven on the car */
+    {
+        hud_palette pal;
+        hud_handles hh;
+        hud_batch bt;
+        int shown = 0, i, j, polys = 0, limits[3] = { 50, 110, 7 };
+        hud_palette_default(&pal);
+        pal.ink = 4;
+        hud_handles_default(&hh);
+        hh.buf[0] = 31;
+        hh.buf[1] = 32;
+        for (j = 0; j < 3; j++) {
+            hud_batch_init(&bt);
+            pal.alert = 9;
+            n = hud_cam_frame(&bt, &pal, &hh, limits[j], j == 2 ? -20 : 320, 500, &shown);
+            assert(n > 0 && n <= 18 && (unsigned)n == bt.n);
+            for (i = 0, polys = 0; i < n; i++) {
+                const hud_call *c = &bt.call[i];
+                assert(hud_call_valid(c));
+                if (c->fkt == 0x21D) {
+                    unsigned k, np = c->p[5];
+                    polys++;
+                    assert(np >= 3 && np <= 64);
+                    for (k = 0; k < np; k++) {
+                        int x = (int16_t)(c->p[6 + 4 * k] << 8 | c->p[7 + 4 * k]), y = (int16_t)(c->p[8 + 4 * k] << 8 | c->p[9 + 4 * k]);
+                        assert(x >= 0 && x < 120 && y >= 0 && y < 72);
+                    }
+                }
+            }
+            /* icon 7 + ring + digits (+ the distance bar before the camera) */
+            assert(polys == 7 + 1 + (limits[j] >= 100 ? 3 : limits[j] >= 10 ? 2 : 1) + (j == 2 ? 0 : 1));
+            assert(bt.call[1].fkt == 0x21B && bt.call[1].p[2] == 9);   /* the camera in the red */
+            assert(last(&bt)->fkt == 0x20E);
+            assert(overlap_px(&bt, 120, 72) == 0);   /* car run 7: no overlapping polygons on 82/02 */
+        }
+        printf("camera alert: %d calls a frame\n", (int)bt.n);
+        /* Orange camera warning (menu, owner 2026-11-20): the camera and the limit sign in 5, the distance bar in the ink */
+        pal.alert = 0;
+        pal.cam = 5;
+        hud_batch_init(&bt);
+        n = hud_cam_frame(&bt, &pal, &hh, 50, 400, 800, &shown);
+        assert(n > 0 && n <= 18 && overlap_px(&bt, 120, 72) == 0);
+        {
+            uint8_t pen = 0, bar_pen = 0;
+            int polys5 = 0, bar_w = 0;
+            for (i = 0; i < n; i++) {
+                const hud_call *c = &bt.call[i];
+                if (c->fkt == 0x21B) pen = c->p[2];
+                if (c->fkt != 0x21D) continue;
+                if (pen == 5) polys5++;
+                if (c->p[5] == 4 && (c->p[8] << 8 | c->p[9]) == 62) { bar_pen = pen; bar_w = (c->p[10] << 8 | c->p[11]) - 4; }
+            }
+            assert(polys5 == 7 + 1 + 2 && bar_pen == 4);
+            assert(bar_w == 112 * 400 / 800);   /* the bar is full at the warning distance */
+        }
+    }
+    /* with the bar: the badge and the limit replace the revs' readout; the gear in the red past the Shift point */
+    {
+        hud_profile p;
+        hud_palette pal;
+        hud_geom g;
+        hud_handles hh;
+        hud_anim an;
+        hud_batch b0, b1;
+        int shown = 0, i, red_pens = 0;
+        hud_profile_b58(&p);
+        hud_palette_default(&pal);
+        pal.base_on = pal.yellow_on = pal.red_on = pal.ink = 4;
+        pal.base_off = pal.yellow_off = pal.red_off = 3;
+        pal.alert = 9;
+        hud_geom_split(&g, 120, 72);
+        hud_handles_default(&hh);
+        hh.buf[0] = 31;
+        hh.buf[1] = 32;
+        hud_anim_reset(&an);
+        for (i = 0; i < 200; i++) hud_anim_step(&an, 3200, (uint32_t)(i * 25));
+        an.gear = 3;
+        hud_batch_init(&b0);
+        assert(hud_strip_frame(&b0, &p, &pal, &g, &hh, &an, &shown) > 0);
+        an.cam_limit = 110;
+        hud_batch_init(&b1);
+        assert(hud_strip_frame(&b1, &p, &pal, &g, &hh, &an, &shown) > 0);
+        assert(overlap_px(&b1, 120, 72) == 0);   /* car run 7: no overlapping polygons with camera badge + limit */
+        /* 3200 shows four digits, 110 three, plus the badge's five shapes and one pen each way */
+        assert(b1.n == b0.n - 4 + 5 + 3 + 2);
+        for (i = 0; i < (int)b1.n; i++) if (b1.call[i].fkt == 0x21B && b1.call[i].p[2] == 9) red_pens++;
+        assert(red_pens == 1 && b1.n <= 24);
+        {
+            hud_strip_key k0, k1;
+            k1 = hud_strip_key_of(&p, &g, &an);
+            an.cam_limit = 0;
+            k0 = hud_strip_key_of(&p, &g, &an);
+            assert(!hud_strip_key_equal(&k0, &k1) && k1.rpm == -1 && k1.cam_limit == 110);
+        }
+        /* past the Shift point the blinking gear is red; without a known red it stays in the ink (today's look) */
+        an.gear_alert = 1;
+        hud_batch_init(&b1);
+        assert(hud_strip_frame(&b1, &p, &pal, &g, &hh, &an, &shown) > 0);
+        for (i = 0, red_pens = 0; i < (int)b1.n; i++) if (b1.call[i].fkt == 0x21B && b1.call[i].p[2] == 9) red_pens++;
+        assert(red_pens == 1);
+        pal.alert = 0;
+        hud_batch_init(&b1);
+        assert(hud_strip_frame(&b1, &p, &pal, &g, &hh, &an, &shown) > 0);
+        for (i = 0, red_pens = 0; i < (int)b1.n; i++) if (b1.call[i].fkt == 0x21B && b1.call[i].p[2] == 9) red_pens++;
+        assert(red_pens == 0);
+        printf("split layout with a camera: %u calls\n", (unsigned)b1.n);
+        /* Orange camera warning: the badge and the limit in 5, the bar and the gear as before */
+        pal.cam = 5;
+        an.gear_alert = 0;
+        an.cam_limit = 110;
+        hud_batch_init(&b1);
+        assert(hud_strip_frame(&b1, &p, &pal, &g, &hh, &an, &shown) > 0 && overlap_px(&b1, 120, 72) == 0);
+        {
+            uint8_t pen = 0;
+            int orange = 0, white = 0;
+            for (i = 0; i < (int)b1.n; i++) {
+                if (b1.call[i].fkt == 0x21B) pen = b1.call[i].p[2];
+                if (b1.call[i].fkt == 0x21D) { if (pen == 5) orange++; else if (pen == 4) white++; }
+            }
+            assert(orange == 5 + 3 && white > 0 && b1.n <= 24);   /* five badge shapes, 1-1-0 */
+        }
+    }
+    /* CDS: the car's JSON position and heading into the GPS frame (names and format still to be seen on the car) */
+    {
+        hud_cds_geo geo;
+        struct geo_frame gf;
+        hud_cds_prop pr[4];
+        double v;
+        const char *cfg = "navigation.GPSPosition gps 500\nnavigation.GPSExtendedInfo heading 500\n";
+        memset(&geo, 0, sizeof geo);
+        geo.heading = -1;
+        assert(hud_cds_parse(cfg, strlen(cfg), pr, 4) == 2 && pr[0].kind == HUD_CDS_GPS && pr[1].kind == HUD_CDS_HEADING);
+        assert(!hud_cds_geo_frame(&geo, 5, &gf));
+        assert(hud_cds_json_num("{\"a\":1,\"latitude\": 50.4501}", "latitude", &v) && v > 50.45 && v < 50.4502);
+        assert(!hud_cds_json_num("{\"platitude\":1}", "latitude", &v));
+        assert(!hud_cds_geo_take(&geo, HUD_CDS_GPS, "{\"GPSPosition\":{\"latitude\":0,\"longitude\":0}}"));
+        assert(hud_cds_geo_take(&geo, HUD_CDS_GPS, "{\"GPSPosition\":{\"latitude\":50.479649,\"longitude\":30.453529,\"altitude\":171}}"));
+        /* BMW CDS GPSExtendedInfo.heading is CCW from North (BimmerGestalt/AAIdrive: 90=W -> 270 CW, 270=E -> 90 CW) */
+        assert(hud_cds_geo_take(&geo, HUD_CDS_HEADING, "{\"GPSExtendedInfo\":{\"altitude\":171,\"heading\":90,\"speed\":12}}"));
+        assert(hud_cds_geo_frame(&geo, 5, &gf) && gf.heading == 270);
+        assert(hud_cds_geo_take(&geo, HUD_CDS_HEADING, "{\"GPSExtendedInfo\":{\"altitude\":171,\"heading\":270,\"speed\":12}}"));
+        assert(hud_cds_geo_frame(&geo, 5, &gf) && gf.heading == 90);
+        assert(hud_cds_geo_take(&geo, HUD_CDS_HEADING, "{\"GPSExtendedInfo\":{\"altitude\":171,\"heading\":100,\"speed\":12}}"));
+        assert(hud_cds_geo_frame(&geo, 5, &gf) && gf.heading == 260);
+        assert(hud_cds_geo_take(&geo, HUD_CDS_HEADING, "{\"GPSExtendedInfo\":{\"altitude\":171,\"heading\":180,\"speed\":12}}"));
+        assert(hud_cds_geo_frame(&geo, 5, &gf) && gf.heading == 180);
+        assert(hud_cds_geo_take(&geo, HUD_CDS_HEADING, "{\"GPSExtendedInfo\":{\"altitude\":171,\"heading\":359.7,\"speed\":12}}"));
+        assert(hud_cds_geo_frame(&geo, 5, &gf) && gf.magic == GEO_MAGIC && gf.lat_e6 == 50479649 && gf.lon_e6 == 30453529);
+        assert(gf.heading == 0 && sizeof gf == 40 && sizeof(struct drive_frame) == 32);
+        {
+            struct drive_frame df;
+            assert(!hud_cds_frame(HUD_CDS_GPS, 50, 5, &df));
+        }
+    }
+    /* settings: cameras on by default, red unknown */
+    {
+        hud_settings st;
+        hud_settings_default(&st);
+        assert(st.cameras == 1 && st.red == 0);
+        assert(hud_settings_parse(&st, "cameras=0\nred=9\nred=300\n", 24) == 2 && st.cameras == 0 && st.red == 9);
+    }
+    /* real shipped plugin/cameras.txt: parses all 426 cameras, directed bearings populated, Pivnichnyi Bridge pair fires one-way */
+    {
+        static char buf[64 * 1024];
+        static hud_cam real[HUD_CAM_MAX];
+        FILE *fp = fopen("plugin/cameras.txt", "r");
+        assert(fp != NULL);
+        {
+            size_t len = fread(buf, 1, sizeof buf, fp);
+            int nr = hud_cams_parse(buf, len, real, HUD_CAM_MAX), directed = 0, lines = 0, i;
+            hud_cam_track t;
+            int step, seen5 = 0, seen8 = 0;
+            double rad = 65.0 * 3.14159265358979323846 / 180.0;
+            fclose(fp);
+            for (i = 0; i < (int)len; i++)   /* every data line parses (426 on 2026-11-19; the police list grows) */
+                if ((i == 0 || buf[i - 1] == '\n') && buf[i] != '#' && buf[i] != '\n') lines++;
+            assert(len < sizeof buf && nr == lines && nr >= 426);
+            for (i = 0; i < nr; i++) {
+                assert(real[i].lat_e6 > 44000000 && real[i].lat_e6 < 53000000);
+                assert(real[i].lon_e6 > 22000000 && real[i].lon_e6 < 41000000);
+                assert(real[i].limit >= 50 && real[i].limit <= 110);
+                if (real[i].dir >= 0) directed++;
+            }
+            assert(directed * 10 >= nr * 8);   /* 376 of 426 on 2026-11-19 */
+            /* row 6 (idx 5) = Pivnichnyi Bridge eastbound (~65 deg), row 9 (idx 8) = westbound (~242 deg) */
+            assert(real[5].dir >= 55 && real[5].dir <= 75 && real[8].dir >= 232 && real[8].dir <= 252);
+            hud_cam_track_init(&t);
+            for (step = -650; step <= 120; step += 15) {
+                hud_geo_fix f;
+                double e = step * sin(rad), no = step * cos(rad);
+                f.lat_e6 = real[5].lat_e6 + (int32_t)(no * 1e6 / 111320.0);
+                f.lon_e6 = real[5].lon_e6 + (int32_t)(e * 1e6 / (111320.0 * cos(50.4921 * 3.14159265358979323846 / 180.0)));
+                f.heading = 65;
+                f.valid = 1;
+                hud_cam_track_update(&t, real, nr, &f);
+                if (t.active) {
+                    if (t.idx == 5) seen5++;
+                    if (t.idx == 8) seen8++;
+                }
+            }
+            assert(seen5 > 25 && seen8 == 0);
+            printf("real cameras.txt: %d parsed, %d directed\n", nr, directed);
+        }
+    }
+}
+
 int main(void) {
     test_proto();
     test_fields();
@@ -1075,11 +1358,10 @@ int main(void) {
     test_scene();
     test_sender();
     test_app();
-    test_text();
-    test_nav();
     test_gear();
     test_cds();
     test_split();
+    test_cameras();
     puts("hud tests passed");
     return 0;
 }

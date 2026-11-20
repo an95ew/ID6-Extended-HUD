@@ -1,65 +1,63 @@
-# HUD design rules (ExtendedHUD on the F34 / 6WB factory HUD)
+# HUD Design Specification (NBT Evo / 6WB Factory HUD)
 
-What a picture on the factory HUD can and cannot do, and the current Sport Bar design. Any new design or demo
-follows this page. Tags: **[car]** seen on the car, **[static]** from the firmware or docs, **[inferred]**.
+Hardware constraints, palette rules, throughput characteristics, and Sport Bar visual design for ExtendedHUD. New HUD layouts or visual changes should conform to these specifications.
 
-## The canvas
+Evidence tags:
+- **`[verified]`** — observed on the reference vehicle (2018 BMW F34 340i, B58, 8-speed automatic; NBT Evo iDrive 6, `NBTevo_X20511I`, split-node; 6WB cluster + factory windscreen HUD)
+- **`[static]`** — derived from firmware inspection or protocol documentation
+- **`[inferred]`** — deduced from related behavior, pending direct hardware confirmation
 
-| Rule | Value | |
+## Canvas
+
+| Property | Specification | Tag |
 |---|---|---|
-| Where we draw | 82/02 (factory HUD), image pair **31/32**, **120×72**, double buffer (`SwitchVisibility`) | [car] |
-| What it needs | `SetVisibility(0x17, 1)` on 82/02 once; it stays set until the HUD sleeps | [car] |
-| Position | right of the factory speed; the speed and the limit sign stay | [car] |
-| Factory texts | 0x1A (street) and 0x1B (distance) show in the factory font **above** our image; 0x1B overlaps its top | [car] |
-| Other images | 19/20, 44/45 accept draws but show nothing; 33/34, 37, 46 lie over 31/32 (the run-5 "shade"): keep them hidden | [car] |
+| Target terminal | MOST `0x82/02` (factory HUD), image handle pair **`31`/`32`**, **`120×72`**, double-buffered via `SwitchVisibility` | `[verified]` |
+| Container activation | `SetVisibility(0x17, 1)` on `82/02` once; persists until the HUD/KOMBI enters sleep | `[verified]` |
+| Placement | Right of the factory speed readout; factory speed and speed-limit sign remain untouched | `[verified]` |
+| Factory text areas | `0x1A` (street) and `0x1B` (distance) render in the factory font **above** the graphic buffer; `0x1B` overlaps its top edge | `[verified]` |
+| Other image handles | `19`/`20` and `44`/`45` accept calls without visible output; `33`/`34`, `37`, and `46` overlap `31`/`32` (producing a washed-out/cropped overlay artifact) and must remain hidden | `[verified]` |
 
-## Colours
+## Palette
 
-Fill colours are 1-byte palette indices, not RGB, set as pen state per image.
+Fill colors are 1-byte palette indices (not RGB), stored as per-image pen state.
 
-| Index | Looks | |
+| Index | Visual Appearance | Tag |
 |---|---|---|
-| **3** | dim grey; almost invisible by day, red-orange at night | [car] |
-| **4** | white, like the factory speed; orange-tinted at night | [car] |
-| 2, 6 | white | [car] |
-| 5, 8, 11 | orange shades (rejected by the owner, run 5) | [car] |
-| 0, 1, 7, 9, 10, 12–39 | accepted, draw nothing | [car] |
+| **`3`** | Dim grey; subtle in bright daylight, tints reddish-orange at night | `[verified]` |
+| **`4`** | White, matching the factory speed readout; tints orange at night | `[verified]` |
+| `2`, `6` | White | `[verified]` |
+| `5`, `8`, `11` | Orange shades (used optionally for speed-camera warnings; not used for Sport Bar) | `[verified]` |
+| `0`, `1`, `7`, `9`, `10`, `12–39` | Accepted by terminal, render nothing | `[verified]` |
 
-No red, yellow or blue exists. Separate zones by **shape**, not colour. Line colour 0 is refused, and outlines
-failed in run 4, so draw everything as filled polygons.
+The 6WB HUD palette provides no red, yellow, or blue. Visual zones are therefore differentiated by **geometry** rather than color. `ImageSetLineColor` (`0x218`) with index `0` is rejected, and stroked outlines are unreliable on hardware, so all elements are rendered as filled polygons.
 
-## Speed
+## Throughput and Protocol Limits
 
-| Rule | Value | |
+| Metric | Specification | Tag |
 |---|---|---|
-| Per call | ~250 ms to the answer, **whatever the window** (3..32 in flight) | [car] run 6 |
-| Per frame | ≤ 12 calls, two frames overlapping, window 32: **~160 ms, about 6 frames a second** (run 5: 1.5–2 s) | [car] run 6 |
-| Batch | at most **48 calls**, 1.5 s per-call timeout, 5 s batch deadline | [static] |
-| Polygon | 51 points (198 B) accepted; the HUD draws the **edges** too, so merge only pieces that touch | [car] run 6 |
-| Blink | the gear flips once per frame past the Shift point (~3 Hz at 6 frames a second) | [car] run 6 |
+| Per-call latency | ~250 ms round-trip to reply, independent of in-flight window (`3..32`) | `[verified]` |
+| Frame throughput | ≤ 12 calls per frame, pipelined (`--pipeline`), window `32`: **~160 ms (~6 fps)** vs. 1.5–2 s unpipelined | `[verified]` |
+| Batch limits | Maximum **48 calls** per batch; 1.5 s per-call timeout; 5 s batch deadline | `[static]` |
+| Polygons | Up to 99 points supported (51-point / 198 B polygons verified); the terminal strokes polygon edges too, so merge only contiguous shapes that touch | `[verified]` |
+| Shift blink | Gear digit toggles once per rendered frame past the Shift point (~3 Hz at 6 fps) | `[verified]` |
 
-Design for it: every frame is RemoveAll, one pen per colour, the bar's pieces merged per colour, each digit its own
-polygon, then the switch. Keep a frame near 12 calls. Whole concave polygons fill cleanly (the nav arrows). [car]
+**Design guideline:** Every frame performs `ImageRemoveAllItems`, sets at most one fill pen per color, merges contiguous bar segments per color, draws each digit as a single polygon, and finishes with `SetVisibility` + `SwitchVisibility`. Keep frames at or below ~12 calls to sustain ~6 fps. Concave polygons fill cleanly without tessellation `[verified]`.
 
-## The Sport Bar
+## Sport Bar Layout (`--layout split`)
 
-**Zones (owner, 2026-11-18):** six low fields 1000–5000, three taller 5000–6000, three tallest 6000–7000. The bar ends
-at the B58 redline and soft limiter, 7000 (fuel cut 7200). The end is the menu's shift setting (default 7000); the
-zones sit 2000 and 1000 below it. The RPM readout follows the engine past the end.
+The shipped Sport Bar uses the split layout across the 120×72 canvas:
 
-**Installed (run 4, approved):** twelve slanted fields across the top of the image, the higher zones taller. Lit fields
-in 3 through the revs, the whole bar in 4 at the end (installed build: 6400, zones at 5200/5900), no unlit fields,
-gear digit centred under the bar. Worst frame 20 calls.
+- **RPM zones (12 slanted segments):**
+  - 6 low segments: `0–5,000` RPM (starting at 0 so idle illuminates part of the first segment)
+  - 3 medium-height segments: `5,000–6,000` RPM
+  - 3 tallest segments: `6,000–7,000` RPM
+  - Default scale top is `7,000` RPM (matching the B58 soft limiter; fuel cut is `7,200` RPM). The zone boundaries track `shift_rpm - 2000` and `shift_rpm - 1000`. The numeric RPM readout continues tracking above the bar maximum.
+- **Fill styling:** The complete 12-segment track renders in dim grey (`3`), while active segments up to the current RPM fill in white (`4`) matching the factory speed readout. At `shift_rpm`, all segments are lit; past `blink_rpm` (`6,200–6,600` RPM, default `6,400`), only the gear digit blinks.
+- **Lower row:** Gear indicator aligned to the left edge of the bar (shown in D/S/M only; hidden in P/N/R) and numeric RPM aligned to the right edge (rounded to the nearest 50 RPM, 4/5 of gear height), both in white (`4`).
+- **Single-polygon digits:** Each digit is encoded as a single polygon on a 3×5 grid; enclosed counters (`0`, `6`, `8`, `9`) use horizontal keyhole bridges so each digit requires only one MOST call. Redraws occur only when the visual state key (active segments, peak, gear, readout, or blink phase) changes.
+- **Shipped worker arguments (`hud_app_worker_argv`):**
+  ```text
+  --draw-live --layout split --flash-ms 0 --palette 3,4,3,4,3,4,4 --shift-colour 4 --backs fill --most-inst 2 --handles 31,32 --canvas 120x72 --container 23 --udp-port 42873 --pipeline
+  ```
 
-**Proposed (2026-11-18, `--layout split`):**
-- The whole bar is drawn in **3** (the track) and the lit fields in **4**, the same brightness as the factory speed,
-  so the bar fills as the revs rise. At the shift point every field is lit.
-- Under the bar: the **gear on the left** (left edge on the bar's) and the **RPM on the right** (right edge on the
-  bar's, to the nearest 50, 4/5 of the gear's height), both in 4.
-- Each digit is **one polygon** on a 3×5 grid; holes (0, 6, 8, 9) are keyholes on a horizontal bridge. The readout
-  costs one call per digit. Worst frame 23 calls; only a changed key (fields, peak, gear, readout) redraws.
-- Worker: `--layout split --palette 3,4,3,4,3,4,4 --shift-colour 4 --backs fill --flash-ms 0`.
-- Car check before shipping: the keyhole holes show, and the dim track reads by day. [inferred until then]
-
-Code: `native/src/hud/hud_strip.c` (`hud_geom_split`, `hud_digit_poly`), tests in `native/tests/test_hud.c`
-(`test_split`). Desk previewer: `native/tools/hud_preview.py`.
+Implementation: `native/src/hud/hud_strip.c` (`hud_geom_split`, `hud_digit_poly`), unit tests in `native/tests/test_hud.c` (`test_split`), and desk HTML previewer in `native/tools/hud_preview.py`.

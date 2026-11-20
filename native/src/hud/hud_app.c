@@ -2,6 +2,7 @@
 #include "hud_app.h"
 
 #include <stdio.h>
+#include <stdlib.h>
 #include <string.h>
 #include <unistd.h>
 
@@ -10,7 +11,7 @@ void hud_app_defaults(hud_settings *s)
     hud_settings_default(s);
     s->sport_bar = 1;
     s->always = 1;
-    s->nav = 1;
+    s->cameras = 1;
 }
 
 void hud_app_load(hud_settings *s, const char *dir)
@@ -46,11 +47,12 @@ int hud_app_save(const hud_settings *s, const char *dir)
 
 void hud_app_toggle(hud_settings *s, hud_app_item item)
 {
+    int *v;
     if (item == HUD_APP_ALWAYS && !s->sport_bar) return;   /* greyed out in the menu while Sport Bar is off */
-    {
-    int *v = item == HUD_APP_SPORT_BAR ? &s->sport_bar : item == HUD_APP_ALWAYS ? &s->always : &s->nav;
+    if (item == HUD_APP_CAM_ORANGE && !s->cameras) return;   /* and the colour while the camera warning is off */
+    v = item == HUD_APP_SPORT_BAR ? &s->sport_bar : item == HUD_APP_ALWAYS ? &s->always
+        : item == HUD_APP_CAMERAS ? &s->cameras : &s->cam_orange;
     *v = !*v;
-    }
 }
 
 const int hud_app_blink_rpm[HUD_APP_BLINK_CHOICES] = { 6200, 6300, 6400, 6500, 6600 };
@@ -65,7 +67,19 @@ void hud_app_blink_label(const hud_settings *s, char *out, size_t cap)
     snprintf(out, cap, "Gear blinks from %d,%03d RPM", s->blink_rpm / 1000, s->blink_rpm % 1000);
 }
 
-int hud_app_wants_worker(const hud_settings *s) { return s->sport_bar || s->nav; }
+const int hud_app_cam_dist_m[HUD_APP_CAM_DIST_CHOICES] = { 300, 500, 800 };
+
+void hud_app_set_cam_dist(hud_settings *s, int i)
+{
+    if (i >= 0 && i < HUD_APP_CAM_DIST_CHOICES) s->cam_dist = hud_app_cam_dist_m[i];
+}
+
+void hud_app_cam_dist_label(const hud_settings *s, char *out, size_t cap)
+{
+    snprintf(out, cap, "Warning from %d m before the camera", s->cam_dist);
+}
+
+int hud_app_wants_worker(const hud_settings *s) { return s->sport_bar || s->cameras; }
 
 const char *hud_app_conflict(const char *plugins_dir)
 {
@@ -88,23 +102,24 @@ int hud_app_worker_argv(const char *dir, const char *gateway, char *buf, size_t 
     static const char *const k_fixed[] = {
         "--draw-live", "--layout", "split", "--flash-ms", "0", "--palette", "3,4,3,4,3,4,4", "--shift-colour", "4",
         "--backs", "fill", "--most-inst", "2", "--handles", "31,32", "--canvas", "120x72", "--container", "23",
-        "--text-handles", "26,27", "--text-visible", "--udp-port", "42873",
+        "--udp-port", "42873",
         /* car run 6 W5: frames overlap (the next starts once the last is all sent), 6.2 frames/s against 3.4 */
         "--pipeline",
     };
-    const char *paths[3];
+    const char *paths[4];
     size_t used = 0, i;
     int argc = 0;
     char *p = buf;
-    const char *fmt[3] = { "%s/hud-sportbar-qnx", "%s/shift-deck-qnx", "%s/settings.txt" };
-    for (i = 0; i < 3; i++) {
+    /* cameras.txt: the speed-camera list (tools/cameras_build.py); none = no camera alerts */
+    const char *fmt[4] = { "%s/hud-sportbar-qnx", "%s/shift-deck-qnx", "%s/settings.txt", "%s/cameras.txt" };
+    for (i = 0; i < 4; i++) {
         int n = snprintf(p, cap - used, fmt[i], dir);
         if (n < 0 || (size_t)n >= cap - used) return -1;
         paths[i] = p;
         p += n + 1;
         used += (size_t)n + 1;
     }
-    if (max < (int)(sizeof k_fixed / sizeof k_fixed[0]) + 8) return -1;
+    if (max < (int)(sizeof k_fixed / sizeof k_fixed[0]) + 10) return -1;
     argv[argc++] = paths[0];
     for (i = 0; i < sizeof k_fixed / sizeof k_fixed[0]; i++) argv[argc++] = k_fixed[i];
     argv[argc++] = "--collector";
@@ -113,8 +128,66 @@ int hud_app_worker_argv(const char *dir, const char *gateway, char *buf, size_t 
     argv[argc++] = gateway;
     argv[argc++] = "--settings";
     argv[argc++] = paths[2];
+    argv[argc++] = "--cameras";
+    argv[argc++] = paths[3];
     argv[argc] = NULL;
     return argc;
+}
+
+void hud_app_version_label(char *out, size_t cap)
+{
+    snprintf(out, cap, "Version %s, released %s", HUD_APP_VERSION, HUD_APP_RELEASED);
+}
+
+/* "# key value" header value into out, trimmed; 1 when the line is that key */
+static int header(const char *line, const char *key, char *out, size_t cap)
+{
+    size_t k = strlen(key), n;
+    if (strncmp(line, "# ", 2) || strncmp(line + 2, key, k) || line[2 + k] != ' ') return 0;
+    line += 3 + k;
+    n = strcspn(line, "\r\n");
+    while (n && line[n - 1] == ' ') n--;
+    if (n >= cap) n = cap - 1;
+    memcpy(out, line, n);
+    out[n] = 0;
+    return 1;
+}
+
+void hud_app_cameras_line(hud_cams_meta *m, const char *line)
+{
+    char *e;
+    while (*line == ' ' || *line == '\t') line++;
+    if (*line == '#') {
+        char date[16];
+        if (header(line, "date", date, sizeof date)) {
+            if (strlen(date) == 10 && date[4] == '-' && date[7] == '-' && strspn(date, "0123456789-") == 10)
+                memcpy(m->date, date, 11);
+        }
+        else if (header(line, "iso", date, sizeof date)) {
+            if (strlen(date) == 2) memcpy(m->iso, date, 3);
+        }
+        else header(line, "country", m->country, sizeof m->country);
+        return;
+    }
+    strtod(line, &e);
+    if (e != line) m->count++;
+}
+
+void hud_app_cameras_label(const char *dir, char *out, size_t cap)
+{
+    char path[256], line[256];
+    hud_cams_meta m;
+    FILE *f;
+    snprintf(path, sizeof path, "%s/cameras.txt", dir);
+    if (!(f = fopen(path, "r"))) {
+        snprintf(out, cap, "Speed cameras: no list installed");
+        return;
+    }
+    memset(&m, 0, sizeof m);
+    while (fgets(line, sizeof line, f)) hud_app_cameras_line(&m, line);
+    fclose(f);
+    snprintf(out, cap, "Speed cameras: %s-%d-%s", m.iso[0] ? m.iso : m.country[0] ? m.country : "?", m.count,
+             m.date[0] ? m.date : "?");
 }
 
 void hud_app_status(const hud_settings *s, int running, const char *conflict, int restarts, char *out, size_t cap)
@@ -122,6 +195,8 @@ void hud_app_status(const hud_settings *s, int running, const char *conflict, in
     if (conflict) snprintf(out, cap, "Off: remove %s first (two HUD apps freeze the HUD)", conflict);
     else if (!hud_app_wants_worker(s)) snprintf(out, cap, "Off");
     else if (!running) snprintf(out, cap, restarts ? "Stopped, retrying (%d)" : "Starting", restarts);
-    else if (s->sport_bar && !s->always) snprintf(out, cap, "Running: bar in Sport and Sport+");
-    else snprintf(out, cap, "Running");
+    else if (!s->sport_bar) snprintf(out, cap, "Running: camera warning only");
+    else if (!s->always) snprintf(out, cap, s->cameras ? "Running: bar in Sport and Sport+, camera warning"
+                                                       : "Running: bar in Sport and Sport+");
+    else snprintf(out, cap, s->cameras ? "Running: bar and camera warning" : "Running: bar");
 }

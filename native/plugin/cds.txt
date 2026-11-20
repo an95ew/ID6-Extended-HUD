@@ -3,3 +3,8 @@
 engine.RPMSpeed rpm 50
 driving.gear gear 50
 driving.mode mode 200
+# Speed cameras (story speed-cameras): the car's position and heading. Names from BMW's Connected apps (AAIdrive), not yet
+# seen on this firmware: hud-cds.log shows whether they are available and what the values look like. The worker ignores
+# a GPS it cannot read; nothing else changes.
+navigation.GPSPosition gps 500
+navigation.GPSExtendedInfo heading 500

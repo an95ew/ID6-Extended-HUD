@@ -70,13 +70,13 @@ input[type=color] { width: 40px; height: 24px; border: 0; background: none; padd
 <div class="wrap">
   <header>
     <h1>HUD Desk Preview</h1>
-    <p>This replays the <b>real output of our C worker</b> (<code>hud-worker --dump</code>), call by call, through a simulated HUD terminal. The terminal has images and text areas per handle, pen colours, <code>ImageRemoveAllItems</code> and <code>SwitchVisibility</code>. Timing follows a simulated round trip, with at most 3 calls waiting for an answer and 48 per batch. <b>Drive story</b> is a two-minute drive: the iDrive menu settings, the driving mode, a CarPlay route and the factory navigation change, and the worker's own scene logic decides what the HUD shows.</p>
+    <p>This replays the <b>real output of our C worker</b> (<code>hud-worker --dump</code>), call by call, through a simulated HUD terminal. The terminal has images and text areas per handle, pen colours, <code>ImageRemoveAllItems</code> and <code>SwitchVisibility</code>. Timing follows a simulated round trip, with at most 3 calls waiting for an answer and 48 per batch. <b>Drive story</b> is a two-minute drive: the iDrive menu settings, the driving mode and the factory navigation change, and the worker's own scene logic decides what the HUD shows. <b>Speed camera</b> replays the scripted camera pass (500 m before to 50 m after it), alone and next to the Sport Bar.</p>
   </header>
 
   <div class="tabs" role="tablist" aria-label="Scenario">
     <button type="button" role="tab" data-tab="story" aria-selected="true">Drive story</button>
     <button type="button" role="tab" data-tab="rpm" aria-selected="false">Sport Bar</button>
-    <button type="button" role="tab" data-tab="nav" aria-selected="false">Navigation (Ukraine)</button>
+    <button type="button" role="tab" data-tab="cam" aria-selected="false">Speed camera</button>
   </div>
 
   <canvas id="hud" width="960" height="360" aria-label="Simulated HUD"></canvas>
@@ -97,13 +97,12 @@ input[type=color] { width: 40px; height: 24px; border: 0; background: none; padd
       <ul id="menu">
         <li data-k="sport_bar"><i class="box"></i>Sport Bar</li>
         <li data-k="always" class="sub"><i class="box"></i>Always show Sport Bar</li>
-        <li data-k="nav"><i class="box"></i>Navigation</li>
+        <li data-k="cameras"><i class="box"></i>Display Speed Camera Warning</li>
       </ul>
     </div>
     <div class="car">
       <div class="chips" aria-label="Car state">
         <span class="chip mode" id="c-mode">Comfort</span>
-        <span class="chip" id="c-route">No route</span>
         <span class="chip" id="c-factory">Factory nav idle</span>
         <span class="chip" id="c-scene">HUD: –</span>
       </div>
@@ -124,7 +123,7 @@ input[type=color] { width: 40px; height: 24px; border: 0; background: none; padd
     <div>
       <h2>Palette (index → colour on screen)</h2>
       <table id="pal"><tr><th>Index</th><th>Role</th><th>Day</th><th>Night</th></tr></table>
-      <p class="note">HUD colours are palette indices. The RGB values here are guesses until the swatch test in the car, so edit them to try a mapping. The texts (street, distance) go to text areas 2 and 3. The cluster decides where those sit, their font, and whether they have Cyrillic, so the positions drawn here are assumed. The worker cleans every text, shortens it like a map (“вул.”, “Str.”, “Васильк.”) to 20 characters, and can send Latin instead of Cyrillic.</p>
+      <p class="note">HUD colours are palette indices. The RGB values here are guesses until the swatch test in the car, so edit them to try a mapping.</p>
     </div>
     <div>
       <h2>Calls in this frame</h2>
@@ -145,7 +144,7 @@ input[type=color] { width: 40px; height: 24px; border: 0; background: none; padd
     night: ["#5c2816", "#ff7b2c", "#605018", "#ffd640", "#641a1e", "#f0262e", "#ff7b2c"],
   };
   const MODE_VAR = { "Comfort": "--comfort", "Sport": "--sport", "Sport+": "--sportplus", "Eco Pro": "--eco", "unknown": "--comfort" };
-  const DEF = { mode: "Comfort", settings: { sport_bar: 1, always: 0, nav: 1, shift_rpm: 6400 }, route: 0, factory_nav: 0, paused: null };
+  const DEF = { mode: "Comfort", settings: { sport_bar: 1, always: 0, cameras: 1, shift_rpm: 6400 }, factory_nav: 0 };
   const $ = id => document.getElementById(id);
   const cv = $("hud"), ctx = cv.getContext("2d");
   const runSel = $("run"), scrub = $("scrub"), playBtn = $("play"), speedSel = $("speed"), lookSel = $("look");
@@ -161,7 +160,7 @@ input[type=color] { width: 40px; height: 24px; border: 0; background: none; padd
   function fillRuns() {
     runSel.innerHTML = "";
     RUNS.forEach((r, i) => { if (r.tab !== tab) return; const o = document.createElement("option"); o.value = i; o.textContent = r.label; runSel.appendChild(o); });
-    const pref = [...runSel.options].find(o => o.textContent.startsWith("10 ms")) || runSel.options[0];   // nav: the first run
+    const pref = [...runSel.options].find(o => o.textContent.startsWith("10 ms")) || runSel.options[0];   // camera: the first run
     runSel.value = pref.value;
     select(+runSel.value);
   }
@@ -220,7 +219,9 @@ input[type=color] { width: 40px; height: 24px; border: 0; background: none; padd
     ctx.font = '700 24px "Saira Semi Condensed", sans-serif'; ctx.textAlign = "center"; ctx.fillStyle = "#222"; ctx.fillText(tab === "rpm" ? "100" : "50", 54, 97);
     const f = run.frames[Math.max(0, fi - 1)];
     const ratio = [0, 5, 3.2, 2.143, 1.72, 1.314, 1, .822, .64];
-    const kph = f && f.gear ? Math.round(f.rpm / (ratio[f.gear] * 3.15) * 2.04 * 60 / 1000) : 0;
+    let gear = 0;   // the last gear shown: past the Shift point the digit blinks, the car keeps its speed
+    for (let i = fi - 1; i >= 0 && !gear; i--) gear = run.frames[i].gear || (run.frames[i].rpm < 1000 ? -1 : 0);
+    const kph = f && gear > 0 ? Math.round(f.rpm / (ratio[gear] * 3.15) * 2.04 * 60 / 1000) : 0;
     ctx.font = '600 68px "Saira Semi Condensed", sans-serif'; ctx.fillStyle = ink(); ctx.fillText(String(kph), 192, 106);
     ctx.font = '500 15px "Saira Semi Condensed", sans-serif'; ctx.fillText("km/h", 192, 128);
     if (st && st.factory_nav) {   // the factory's own guidance owns the right half; our images are cleared
@@ -231,13 +232,15 @@ input[type=color] { width: 40px; height: 24px; border: 0; background: none; padd
     ctx.restore();
   }
   function draw(st) {
-    const [W, H] = run.head.canvas, sx = cv.width / W, sy = cv.height / H;
+    // Our image (82/02 31/32, 120x72) sits right of the factory speed, at x 250..466, y 36..166 of the 480x180 picture.
+    const [W, H] = run.head.canvas, k0 = cv.width / 480, sx = 216 * k0 / W, sy = 130 * k0 / H, ox = 250 * k0, oy = 36 * k0;
     ctx.fillStyle = "#000"; ctx.fillRect(0, 0, cv.width, cv.height);
     factory(cv.width / 480, cv.height / 180, st);
+    ctx.save(); ctx.setLineDash([3 * k0, 3 * k0]); ctx.strokeStyle = "rgba(255,255,255,.18)"; ctx.strokeRect(ox, oy, W * sx, H * sy); ctx.restore();
     Object.keys(images).map(Number).sort((a, b) => a - b).forEach(h => {
       if (!visible[h]) return;
       images[h].forEach(it => {
-        ctx.beginPath(); it.pts.forEach(([x, y], i) => i ? ctx.lineTo(x * sx, y * sy) : ctx.moveTo(x * sx, y * sy)); ctx.closePath();
+        ctx.beginPath(); it.pts.forEach(([x, y], i) => i ? ctx.lineTo(ox + x * sx, oy + y * sy) : ctx.moveTo(ox + x * sx, oy + y * sy)); ctx.closePath();
         ctx.fillStyle = colours[it.c] || "#ff00ff"; ctx.fill();
       });
     });
@@ -265,14 +268,11 @@ input[type=color] { width: 40px; height: 24px; border: 0; background: none; padd
     let status;
     if (st.factory_nav) status = "HUD busy: factory navigation";
     else if (scene === "rpm") status = `Sport Bar active · ${st.mode} · ${Math.round(f.rpm).toLocaleString("en-US")} rpm`;
-    else if (scene === "nav") status = `Navigation · ${texts[(run.head.text_handles || [2])[0]] || ""}`;
-    else if (!st.route && st.settings.nav) status = "Waiting for CarPlay route";
     else status = `Nothing to show in ${st.mode}`;
-    $("status").innerHTML = status + (st.paused ? `<span class="why">${st.paused}</span>` : "");
+    $("status").textContent = status;
     const m = $("c-mode"); m.textContent = st.mode; m.style.background = `var(${MODE_VAR[st.mode]})`;
-    $("c-route").textContent = st.route ? "CarPlay route" : "No route"; $("c-route").classList.toggle("on", !!st.route);
     $("c-factory").textContent = st.factory_nav ? "Factory nav guiding" : "Factory nav idle"; $("c-factory").classList.toggle("on", !!st.factory_nav);
-    $("c-scene").textContent = "HUD: " + ({ rpm: "Sport Bar", nav: "Navigation", none: "factory only" }[scene]);
+    $("c-scene").textContent = "HUD: " + ({ rpm: "Sport Bar", none: "factory only" }[scene]);
     if (st !== lastState) {
       lastState = st;
       $("log").querySelectorAll("li").forEach((li, i) => {

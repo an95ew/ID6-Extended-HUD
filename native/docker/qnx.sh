@@ -2,7 +2,7 @@
 # QNX SDP 6.5 in Docker. The toolchain lives in the volumes qnx650 (/opt/qnx650) and qnxetc (/etc/qnx).
 #   qnx.sh image                  build the container image
 #   qnx.sh install DIR_WITH_ISO   run the official installer in console mode (asks for the licence key)
-#   qnx.sh build                  run build_hud.sh -> out/hud-sportbar-qnx, out/shift-deck-qnx, out/librghook.so
+#   qnx.sh build                  run build_hud.sh -> out/hud-sportbar-qnx, out/shift-deck-qnx
 #   qnx.sh build-all              run build.sh -> adds out/libExtendedHUD.so (needs native/frameworks/)
 #   qnx.sh package                run build.sh + package.sh -> out/ExtendedHUD/ and out/extended-hud.zip
 #   qnx.sh shell                  shell with the toolchain mounted

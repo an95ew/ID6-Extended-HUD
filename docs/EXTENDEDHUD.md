@@ -1,124 +1,137 @@
 # ExtendedHUD
 
-ExtendedHUD puts an M-style rev bar ("Sport Bar") on the factory windscreen HUD of an NBT Evo car with a 6WB cluster. A navigation
-scene with turn arrows, lanes and street and distance text is drawn too, but it has no live source yet. The app shows up as
-**My Vehicle → ExtendedHUD**. It was tested on an F34 340i (B58), NBT Evo firmware `NBTevo_X20511I`, on a split-node unit.
+ExtendedHUD renders an M-style sequential rev bar (**Sport Bar**) and **speed-camera warnings** on the factory windscreen HUD of BMW NBT Evo (iDrive 6) vehicles equipped with a 6WB instrument cluster. It appears under **My Vehicle → ExtendedHUD**.
 
-## How it works
+- **Release:** 0.0.1 (2026-11-20)
+- **Installation guide:** [../INSTALL.md](../INSTALL.md)
+- **Navigation note:** CarPlay turn-by-turn HUD navigation is under development on the `feature/nav` branch and is not included in this build.
 
-```
-HmiMain3D ── libExtendedHUD.so        menu, settings file, start/stop of the worker (no drawing, no network in the HMI)
+## Reference Test Platform
+
+All hardware-verified behavior in this documentation was tested on:
+
+| Component | Specification |
+|---|---|
+| Vehicle | 2018 BMW F34 340i (B58, 8-speed automatic) |
+| Head unit | NBT Evo (iDrive 6), firmware `NBTevo_X20511I`, split-node (`hu-jacinto` SSH / `hu-omap` HMI) |
+| Cluster / HUD | 6WB digital instrument cluster with factory windscreen HUD |
+
+Other NBT Evo firmware versions and F-series 6WB/HUD configurations may be compatible, subject to framework ABI verification prior to installation.
+
+## Architecture
+
+```text
+HmiMain3D ── libExtendedHUD.so        HMI menu, settings persistence, worker lifecycle (no drawing or network I/O on the HMI thread)
                │ spawn + SIGTERM
                ▼
-             hud-sportbar-qnx         draws on the HUD: MOST FBlock 0x82 (HUDTerminal), instance 2
-               │ posix_spawn                     ▲ UDP 127.0.0.1:42873, {sampled_ms, rpm, kph}
+             hud-sportbar-qnx         Draws to factory HUD over MOST FBlock 0x82 (HUDTerminal), instance 2
+               │ posix_spawn                     ▲ UDP 127.0.0.1:42873, {sampled_ms, rpm, kph, ...}
                ▼
-             shift-deck-qnx           OBD 01 0C (RPM) and 01 0D (speed) to the DME, over HSFZ or the MOST tunnel
+             shift-deck-qnx           Read-only OBD 01 0C (RPM) and 01 0D (speed) to DME 0x12 over HSFZ or the MOST tunnel
 ```
 
-- The plugin writes `settings.txt` in its folder (`sport_bar`, `always`, `nav`, `shift_rpm`, `lang`, `text`, `street_max`), through a
-  temporary file and a rename. The worker reads it every second.
-- The worker only runs while Sport Bar or Navigation is ticked. It clears its picture when it stops.
-- The collector (`native/src/collector.c` → `shift-deck-qnx`) is strictly read-only and sends only OBD service `01`. Its UDP port
-  (`42873`) is kept separate from `DRIVE_PORT` (`42863`) so it can coexist with ShiftDeck if installed.
-- The car data comes from the HMI's car data service (CDS, below): revs about every 100 ms, the gear and the driving mode on change.
-  The collector's OBD read (~260 ms a request over the MOST tunnel) is the fallback while CDS is quiet. Data older than 2 s is not drawn.
+- The plugin persists configuration to `settings.txt` in its installation directory (`sport_bar`, `always`, `shift_rpm`, `blink_rpm`, `cameras`, `cam_dist`, `cam_orange`, etc.) using atomic write-and-rename. The worker reloads the file every second.
+- The worker runs only while **Show Sport Bar** or **Show camera warning** is enabled, and clears its HUD canvas when stopped.
+- The OBD collector (`native/src/collector.c` → `shift-deck-qnx`) is strictly read-only and issues only OBD service `01` requests. Its UDP port (`42873`) is distinct from `DRIVE_PORT` (`42863`) so it can coexist with ShiftDeck if installed.
+- Primary vehicle telemetry comes from the HMI Car Data Service (CDS, below): engine RPM approximately every 100 ms, with gear and driving mode reported on change. The OBD collector (~260 ms per request over the MOST tunnel) acts as an automatic fallback when CDS is idle. Frames older than 2 s are treated as stale and not rendered.
 
-## The HUD terminal
+## HUD Terminal (`0x82/02`)
 
-The 6WB renders what the head unit sends to the HUDTerminal function block **0x82**: instance **0** is the cluster's navigation picture,
-instance **2** the HUD. Calls are OpType 6 with the target handle as the first u16; this car answers with OpType **D**.
+The 6WB cluster renders graphics sent to MOST function block **0x82** (`HUDTerminal`): instance **0** drives the cluster navigation display, and instance **2** drives the windscreen HUD. Calls use OpType `6` (`StartResultAck`) with the target handle as the leading `uint16`; the reference unit responds with OpType **`D`** (`ResultAck`).
 
-| Handle (82/02) | Size | Use |
-| --- | --- | --- |
-| 31/32 (0x1F/0x20) | 120×72 | ExtendedHUD's double buffer, right of the factory speed |
-| 23 (0x17) | | the navigation container: `SetVisibility(0x17, 1)` is needed before anything shows |
-| 26/27 (0x1A/0x1B) | | text areas: street and distance in the factory font, Latin and Cyrillic |
+| Handle (`82/02`) | Size | Role |
+|---|---|---|
+| `31`/`32` (`0x1F`/`0x20`) | 120×72 | Double-buffered drawing canvas to the right of the factory speed readout |
+| `23` (`0x17`) | 250×116 | Navigation container (`SetVisibility(0x17, 1)` is required before graphics appear) |
+| `26`/`27` (`0x1A`/`0x1B`) | Text areas | Factory-font street and distance fields, Latin and Cyrillic (used on `feature/nav` only) |
 
-A frame is `ImageRemoveAllItems` on the hidden buffer, a fill colour, polygons, then `SetVisibility` + `SwitchVisibility`. Colours
-are palette indices: 2, 4 and 6 are white, 3 dim grey, 5, 8 and 11 orange. At night the HUD tints white toward orange by itself.
-Visibility and pen state stay set in the terminal until the HUD sleeps; a test that switches another image on must switch it off
-again, or it lies over the picture. The HUD draws a polygon's edges too, so pieces are only merged where they touch.
+Each frame sends `ImageRemoveAllItems` on the back buffer, sets the fill palette index, submits polygons, and finishes with `SetVisibility` + `SwitchVisibility`. Colors are 1-byte palette indices: `2`, `4`, and `6` render white; `3` renders dim grey; `5`, `8`, and `11` render orange shades. At night, the factory HUD automatically tints white toward orange. Visibility and pen state persist inside the terminal until the HUD/KOMBI sleeps, so any test that enables another image handle must hide it again before exiting. Because the HUD strokes polygon edges as well as filling interiors, polygons are only merged where shapes physically touch.
 
-The look is the split Sport Bar: the whole track always shows dim (index 3), the lit part fills in white (4) like the factory speed,
-the gear sits on the left under it and the RPM on the right. It shows only with the engine running and the gearbox in D, S or M,
-idle included (before a launch). With the engine off, or in P, N or R, nothing of ours is drawn. Everything comes from the car: the
-gear is CDS `driving.gear`, never estimated from RPM and speed. A value not mapped yet counts as "not D/S", so the bar stays off. Past
-the Shift point (menu, 6200–6600 rpm, default 6400) only the gear number blinks, one flip per frame.
+The **Sport Bar** uses the split layout: the full track remains visible in dim grey (index `3`), active segments fill in white (`4`) matching the factory speed readout, the current gear sits on the lower left, and numeric RPM sits on the lower right. It displays only when the engine is running and the transmission is in D, S, or M (including idle). With the engine off or in P, N, or R, the canvas stays clear. Gear data comes strictly from CDS `driving.gear` and is never estimated from RPM and speed; unmapped raw values are treated as non-drive states. Above the configured **Shift point** (`6,200–6,600` RPM, default `6,400`), only the gear digit blinks (one toggle per rendered frame).
 
-**Speed.** A frame is at most 12 calls (the bar's pieces merged per colour, each digit its own polygon). A call answers in about
-250 ms on this car whatever the window, so the worker overlaps frames (`--pipeline`): the next frame starts as soon as the last one is
-all sent, into the other buffer. With `in_flight=32` that is about **6 frames a second (160 ms a frame)**, against ~1.8 s for the
-first design. Measured on the car (run 6): window 3 → 828 ms, 8 → 378 ms, 16 → 285 ms, pipelined 32 → 161 ms.
+**Frame rate.** Each frame takes at most 12 MOST calls (bar segments merged per color; one polygon per digit). Because individual replies take ~250 ms regardless of the in-flight window on the reference head unit, the worker pipelines frames (`--pipeline`): the next frame begins into the alternate buffer as soon as the current frame's calls are transmitted. With `in_flight=32`, measured throughput on the reference hardware is **~6 fps (~160 ms per frame)**, compared to ~1.8 s unpipelined (`window 3 → 828 ms`, `8 → 378 ms`, `16 → 285 ms`, `pipelined 32 → 161 ms`).
 
-## Menu
+## iDrive Menu
 
-| Row | Does |
-| --- | --- |
-| status line | Off / Starting / Running / why it is paused |
-| Sport Bar | the rev bar |
-| Always show Sport Bar | the bar in every driving mode; greyed out while Sport Bar is off |
-| Navigation | the turn scene when a route gives guidance |
-| Shift point | a page with five values, 6,200–6,600 RPM: where the gear starts blinking |
+The main page holds the status line and three submenus: **Sport Bar**, **Speed Camera Warning** and **App information**
+(a page with fixed rows does not scroll, so the options live in the submenus).
 
-Without Always, the bar shows in Sport and Sport+ only. The driving mode comes from CDS `driving.mode`.
+| Submenu → row | Behavior |
+|---|---|
+| Status line (main page) | `Off` / `Starting` / `Running` (active features summary) |
+| Sport Bar → Show Sport Bar | Enables or disables the sequential rev bar |
+| Sport Bar → Always show Sport Bar | Shows the bar in all driving modes; disabled while Sport Bar is off |
+| Sport Bar → Shift point | Submenu with five options (`6,200–6,600` RPM) controlling gear-blink threshold |
+| Speed Camera Warning → Show camera warning | Enables or disables GPS-based fixed speed-camera alerts |
+| Speed Camera Warning → Orange camera warning | Renders camera icon and speed limit in orange (palette `5`) instead of white; disabled while camera warning is off |
+| Speed Camera Warning → Warning distance | Submenu: `300`, `500` (default), or `800` m lead distance; disabled while camera warning is off |
+| App information | Displays app version, release date, and installed camera database as `Speed cameras: <ISO>-<count>-<YYYY-MM-DD>` (e.g., `UA-426-2026-11-19`) |
 
-`settings.txt` also takes two tuning keys with no menu row: `in_flight=1..32` (HUD calls awaiting an answer, default 32) and `merge_pts=-1..99`
-(points per merged polygon; 0 draws one polygon per piece, -1 the layout's default). The worker re-reads the file every second.
+When **Always show Sport Bar** is unchecked, the bar appears only in Sport and Sport+ (read from CDS `driving.mode`).
 
-**CDS (car data).** `cds.txt` in the app folder (shipped), one `<property> <kind> [interval]` per line (kind `log`, `rpm`, `kph`,
-`gear` or `mode`), makes the plugin watch those properties. It logs every value to `/tmp/hud-cds.log` and sends the non-`log` kinds to
-the worker. CDS sends a value only when it changes, so the plugin repeats the last one every second. Registering creates `cds.guard`,
-and the plugin removes it 30 s later. If a start dies in the CDS calls, the guard stays behind and the next start skips CDS. Delete
-`cds.guard` to try again.
+Legacy keys in `settings.txt` (`nav`, `lang`, `text`, `street_max`) are ignored. Optional tuning keys with no menu row can also be set in `settings.txt` (reloaded every second):
+- `red=N`: custom fill palette index for shift-zone highlights and camera alerts (`0`, default, keeps white because the 6WB HUD palette has no red).
+- `in_flight=1..32`: maximum concurrent HUD calls awaiting replies (default `32`).
+- `merge_pts=-1..99`: vertex limit per merged polygon (`0` disables merging; `-1` uses the layout default).
 
-| Property (NBT Evo X20511I) | Values |
-| --- | --- |
-| `engine.RPMSpeed` | `{"RPMSpeed":660}`; ~100 ms updates at interval 50 |
-| `driving.gear` | 1 N, 2 R, 3 P, 5 = 1st, 6 = 2nd (seen on the car); 7..12 = 3rd..8th (inferred, same counter) |
-| `driving.mode` | 3 Comfort, 4 Sport, 5 Sport+, 7 Eco Pro |
-| `driving.speedActual`, `driving.speedDisplayed` | km/h (not drawn) |
+### Car Data Service (CDS)
 
-## Build and package
+The shipped `cds.txt` file in the plugin directory lists one `<property> <kind> [interval]` entry per line (`log`, `rpm`, `kph`, `gear`, `mode`, `gps`, `heading`). The plugin logs values to `/tmp/hud-cds.log` and forwards non-`log` signals to the worker. Because CDS emits updates only on change, the plugin repeats the last known values once per second.
+
+During CDS registration, the plugin writes a `cds.guard` file and removes it 30 s later. If initialization crashes inside CDS registration, `cds.guard` remains on disk and subsequent boots skip CDS until the file is deleted.
+
+| Property (`NBTevo_X20511I`) | Observed Format / Mapping |
+|---|---|
+| `engine.RPMSpeed` | `{"RPMSpeed":660}`; ~100 ms updates at interval `50` |
+| `driving.gear` | `1` = N, `2` = R, `3` = P, `5` = 1st, `6` = 2nd (verified on reference vehicle); `7..12` = 3rd..8th (inferred from sequential counter) |
+| `driving.mode` | `3` = Comfort, `4` = Sport, `5` = Sport+, `7` = Eco Pro |
+| `driving.speedActual`, `driving.speedDisplayed` | km/h (logged/available, not drawn) |
+| `navigation.GPSPosition` | `{"GPSPosition":{"latitude":…,"longitude":…}}` — vehicle position for camera matching |
+| `navigation.GPSExtendedInfo` | `{"GPSExtendedInfo":{"heading":…}}` — counter-clockwise from North (per BimmerGestalt/AAIdrive), converted clockwise by the plugin; pending on-road verification |
+
+## Speed Cameras
+
+`cameras.txt` in the plugin directory stores one fixed camera per line as `lat lon limit dir`, where `dir` is the monitored direction of travel in degrees clockwise from North, or `-1` for bidirectional monitoring. The file header includes source attribution, `# country`, `# iso`, and `# date`, which populate the **App information** page.
+
+- **Trigger window:** Active from the configured **Warning distance** ahead of a camera until 50 m past it. Requires the engine to be running, suppresses alerts while factory navigation guidance is active, and matches only cameras ahead on the vehicle's path (within 30° of heading and 60 m laterally) that monitor the vehicle's direction of travel (within 50°; clears if turning more than 70° away). Fixed cameras only.
+- **Display modes:** When Sport Bar is off, the alert uses the full canvas (camera icon, speed limit, and shrinking distance bar). When Sport Bar is active, a compact camera icon appears between the gear and RPM, with the speed limit shown in the RPM slot.
+- **Database maintenance:** `tools/cameras_build.py` builds `cameras.txt` per country from `tools/cameras_sources.json`, fetching only the selected country. Database updates are independent of app releases (see skill `update-speedcam-db`).
+  - **Ukraine** (example bundled dataset): Patrol Police fixed-camera registry combined with OpenStreetMap direction tags (bidirectional radar complexes and undirected entries alert in both directions).
+  - **United Kingdom** (example OSM dataset): OpenStreetMap `highway=speed_camera` nodes with signed mph limits and left-hand traffic rules (desk-built, not yet road-tested).
+
+## Build and Packaging
 
 ```sh
-make -C native test                              # host tests: drawing, sender, scenes, app logic, rg, MOST, diag_link
-sh native/docker/qnx.sh build                    # native/out/{hud-sportbar-qnx,shift-deck-qnx,librghook.so}
-sh native/docker/qnx.sh package                  # adds native/out/libExtendedHUD.so, out/ExtendedHUD/, out/extended-hud.zip
+make -C native test                              # Host unit tests (drawing, sender, scenes, app logic, cameras, MOST, diag_link)
+sh native/docker/qnx.sh build                    # Worker binaries: native/out/{hud-sportbar-qnx,shift-deck-qnx}
+sh native/docker/qnx.sh package                  # Full build: native/out/libExtendedHUD.so, out/ExtendedHUD/, out/extended-hud.zip
 sh .claude/skills/deploy-plugins/abi_check.sh out/libExtendedHUD.so
 ```
 
-`native/build.sh` links against the car's own `libAppFramework.A.so` and `libCoreFramework.A.so` in `native/frameworks/` (never committed).
-Before installing, check that every `bmw::` symbol the library needs is defined by that pair (`abi_check.sh` / `ntoarm-nm -D`).
-See [BUILD.md](BUILD.md) for QNX Docker toolchain setup.
+`native/build.sh` links against the target head unit's `libAppFramework.A.so` and `libCoreFramework.A.so` placed in `native/frameworks/` (git-ignored; never commit proprietary BMW binaries). Always verify that every imported `bmw::` symbol resolves against the target frameworks before installing (`abi_check.sh` via QNX SDP or `python3 tools/abi_check.py` without the SDK). See [BUILD.md](BUILD.md) for toolchain setup.
 
-## Install, update, remove
+## Installation, Update, and Removal
 
-The app folder is `/var/opt/hmi/data/ID5/Plugins/ExtendedHUD/` on the HMI node: `ExtendedHUD.manifest` (Etch connector **121**),
-`ExtendedHUD.xml`, `libExtendedHUD.so`, `hud-sportbar-qnx`, `shift-deck-qnx`, `gateway-ip.txt`, `cds.txt`. On a split-node unit, reach it from
-the SSH node as `/net/hu-omap/fs/sda1/opt/hmi/data/ID5/Plugins/`, and run `chmod` with `on -f hu-omap`. Verify every file by reading
-it back, then restart iDrive (hold the volume knob until the screen goes dark).
+The plugin directory on the HMI node is `/var/opt/hmi/data/ID5/Plugins/ExtendedHUD/`, containing `ExtendedHUD.manifest` (Etch connector **121**), `ExtendedHUD.xml`, `libExtendedHUD.so`, `hud-sportbar-qnx`, `shift-deck-qnx`, `gateway-ip.txt`, `cds.txt`, and `cameras.txt`. See [../INSTALL.md](../INSTALL.md) for full instructions.
 
-- To update a file, upload it under a new name, check it, then `mv` it over the old one. The HMI has the library mapped and the worker
-  may be running.
-- To remove the app, delete the folder and restart iDrive.
-- Don't run another HUD app (HUD Gauges / HudTest, Wayglass) at the same time: two senders freeze the HUD. ExtendedHUD refuses to start
-  when `HudTest` is installed.
+- On split-node units, access the directory from the SSH node at `/net/hu-omap/fs/sda1/opt/hmi/data/ID5/Plugins/` and run `chmod` via `on -f hu-omap`. Verify every uploaded file by SHA-256 readback, then restart iDrive (hold the volume knob until the screen goes dark).
+- **Updating:** Upload modified files under a temporary `.new` name, verify SHA-256 readback, then `mv` over the existing file so mapped binaries and running workers are never overwritten in place.
+- **Removing:** Delete the `ExtendedHUD` directory (and `Plugins` if it did not exist prior to installation) and restart iDrive.
+- **Single-sender requirement:** Do not install or run alongside another HUD sender (`HudTest` / HUD Gauges, Wayglass); concurrent HUDTerminal senders freeze the HUD. ExtendedHUD refuses to start if `HudTest` is present.
 
 ## Troubleshooting
 
-| Symptom | Check |
-| --- | --- |
-| no bar with the engine running | P, N or R; or the gear value isn't mapped yet (`gear raw` in `/tmp/hud-sportbar.log`, values in `/tmp/hud-cds.log`) |
-| no bar while revving in D | `on -f hu-omap cat /tmp/hud-sportbar.log`: `rpm`, `lag`, `transport: MOST` |
-| HUD blank while revving | `on -f hu-omap cat /tmp/hud-sportbar.log`: look for `rpm`, `transport: MOST`, `Address already in use` |
-| bar flickers off | stale frames: a slow link, see "How it works" |
-| picture soft or cropped | another image left visible by an earlier test: `SetVisibility(h, 0)` on it |
-| navigation never shows | no CarPlay turn source yet (below) |
+| Symptom | Diagnostic Steps |
+|---|---|
+| No bar with engine running | Check gear (hidden in P, N, R) or unmapped gear values (`gear raw` in `/tmp/hud-sportbar.log`, CDS values in `/tmp/hud-cds.log`) |
+| No bar while revving in D/S/M | Inspect `/tmp/hud-sportbar.log` (`on -f hu-omap cat /tmp/hud-sportbar.log` on split-node): check `rpm`, `lag`, `transport: MOST` |
+| HUD blank while revving | Inspect `/tmp/hud-sportbar.log` for `rpm`, `transport: MOST`, or `Address already in use` |
+| Bar flickers off intermittently | Stale drive frames from link latency; review transport logs and staleness threshold |
+| Picture appears soft or cropped | Another HUDTerminal image handle was left visible by a prior diagnostic test; clear it with `SetVisibility(h, 0)` |
+| No speed-camera warning | Verify engine is running, warning is enabled, camera faces direction of travel, and **App information** lists a valid camera database |
 
-## Not done yet
+## Known Limitations and Work in Progress
 
-- **CarPlay turns.** The head unit's 2017 iAP2 driver (`mm-ipod`) doesn't ask the iPhone for route guidance, so no turns arrive. Getting
-  them needs a hook (`librghook.so`) inside `mm-ipod`: declare a route-guidance display, request updates, decode the messages. It is loaded
-  through the CarPlay start path. That is a system change outside the app folder and waits for a decision.
-- **Gears 3rd–8th:** CDS values 7..12 follow the counter seen for 1st and 2nd but haven't been seen on a drive yet.
+- **CarPlay turn-by-turn navigation (`feature/nav`):** The NBT Evo iAP2 driver (`mm-ipod`) does not request route guidance from iOS by default; enabling CarPlay turn data requires hooking `mm-ipod`, which involves system-level modifications outside the plugin directory.
+- **On-road speed-camera validation:** Heading conversion and alert matching are covered by host unit tests; live on-road validation past fixed cameras is pending.
+- **Gears 3rd–8th:** CDS `driving.gear` values `7..12` are inferred from the sequential mapping verified for 1st (`5`) and 2nd (`6`) and remain to be confirmed at highway speeds.

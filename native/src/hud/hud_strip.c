@@ -1,11 +1,12 @@
 #include "hud_strip.h"
+#include "hud_cam.h"
 
 #include <math.h>
 #include <string.h>
 
 void hud_profile_b58(hud_profile *p)
 {
-    p->lo = 1000;
+    p->lo = 0;   /* owner 2026-11-19: the bar fills from 0, so idle already lights part of the first field */
     p->redline = 7000;
     p->flash_ms = 125;
     hud_profile_for_shift(p, 7000);
@@ -33,52 +34,13 @@ void hud_palette_default(hud_palette *p)
     p->ink = 4;
     p->shift_on = 0;
     p->backs = HUD_BACKS_FILL;
+    p->alert = 0;   /* no red found on 82/02 yet (run 3); settings red=N once the car shows one */
+    p->cam = 0;
 }
 
-void hud_geom_default(hud_geom *g)
-{
-    g->canvas_w = 480;
-    g->canvas_h = 180;
-    g->x = 258;
-    g->y = 54;
-    g->w = 208;
-    g->h = 30;
-    g->gap = 3;
-    g->slant = 7;
-    g->gear_cx = 362;
-    g->gear_top = 104;
-    g->gear_h = 44;
-    g->nav_x0 = 0;
-    g->nav_text_top = 0;
-    g->rise = 0;
-    g->rpm_x1 = g->rpm_h = g->solid_digits = g->merge_pts = 0;
-}
+uint8_t hud_cam_ink(const hud_palette *p) { return p->cam ? p->cam : p->alert ? p->alert : p->ink; }
 
-void hud_geom_for_canvas(hud_geom *g, int canvas_w, int canvas_h)
-{
-    hud_geom d;
-    double sx, sy;
-    hud_geom_default(&d);
-    sx = (double)canvas_w / d.canvas_w;
-    sy = (double)canvas_h / d.canvas_h;
-    g->canvas_w = canvas_w;
-    g->canvas_h = canvas_h;
-    g->x = (int)lround(d.x * sx);
-    g->y = (int)lround(d.y * sy);
-    g->w = (int)lround(d.w * sx);
-    g->h = (int)lround(d.h * sy);
-    g->gap = d.gap * sx < 1 ? 1 : (int)lround(d.gap * sx);
-    g->slant = (int)lround(d.slant * sx);
-    g->gear_cx = (int)lround(d.gear_cx * sx);
-    g->gear_top = (int)lround(d.gear_top * sy);
-    g->gear_h = (int)lround(d.gear_h * sy);
-    g->nav_x0 = 0;
-    g->nav_text_top = 0;
-    g->rise = 0;
-    g->rpm_x1 = g->rpm_h = g->solid_digits = g->merge_pts = 0;
-}
-
-void hud_geom_big(hud_geom *g, int canvas_w, int canvas_h)
+void hud_geom_split(hud_geom *g, int canvas_w, int canvas_h)
 {
     g->canvas_w = canvas_w;
     g->canvas_h = canvas_h;
@@ -88,21 +50,12 @@ void hud_geom_big(hud_geom *g, int canvas_w, int canvas_h)
     g->h = canvas_h * 24 / 72;
     g->gap = canvas_w / 120 + 1;
     g->slant = canvas_w / 20;
-    g->gear_cx = canvas_w / 2;
     g->gear_top = g->y + g->h + canvas_h / 18;
     g->gear_h = canvas_h - g->gear_top - 2;
-    g->nav_x0 = 240;   /* the nav design lives in x 244..470 */
-    g->rise = g->h / 4;
-    g->rpm_x1 = g->rpm_h = g->solid_digits = g->merge_pts = 0;
-}
-
-void hud_geom_split(hud_geom *g, int canvas_w, int canvas_h)
-{
-    hud_geom_big(g, canvas_w, canvas_h);
     g->gear_cx = g->x + g->gear_h * 6 / 11 / 2;   /* left edge on the strip's */
+    g->rise = g->h / 4;
     g->rpm_x1 = g->x + g->w;
     g->rpm_h = g->gear_h * 4 / 5;                 /* a step smaller: the gear leads */
-    g->solid_digits = 1;
     g->merge_pts = HUD_MAX_POINTS;
 }
 
@@ -175,6 +128,9 @@ hud_strip_key hud_strip_key_of(const hud_profile *p, const hud_geom *g, const hu
     k.peak_field = -1;
     k.gear = a->gear;
     k.rpm = g->rpm_h > 0 && a->have ? hud_rpm_shown(a->rpm) : -1;
+    k.gear_alert = a->gear_alert != 0;
+    k.cam_limit = a->cam_limit > 0 && a->cam_limit < 1000 ? a->cam_limit : 0;
+    if (k.cam_limit) k.rpm = -1;   /* the limit takes the readout's place */
     k.shifting = hud_anim_shifting(p, a);
     k.flash_on = k.shifting ? hud_anim_flash_on_p(p, a) : 1;
     if (k.shifting) {
@@ -201,19 +157,22 @@ hud_strip_key hud_strip_key_of(const hud_profile *p, const hud_geom *g, const hu
 
 int hud_strip_key_equal(const hud_strip_key *a, const hud_strip_key *b) { return !memcmp(a, b, sizeof *a); }
 
-/* Field i as a parallelogram, the first t of its width. */
+/* Field i as a parallelogram, from t0 to t1 of its width. */
 static int field_top(const hud_geom *g, int i) { return g->y - g->rise * hud_field_zone(i) / 2; }
 
-static void field_poly(const hud_geom *g, int i, double t, hud_point pt[4])
+static void field_part(const hud_geom *g, int i, double t0, double t1, hud_point pt[4])
 {
     double fw = field_width(g), x0 = g->x + i * (fw + g->gap);
     int top = field_top(g, i), bot = g->y + g->h;
     double sl = g->h ? (double)g->slant * (bot - top) / g->h : g->slant;   /* same lean when taller */
-    pt[0].x = (int16_t)lround(x0 + sl);          pt[0].y = (int16_t)top;
-    pt[1].x = (int16_t)lround(x0 + sl + fw * t); pt[1].y = (int16_t)top;
-    pt[2].x = (int16_t)lround(x0 + fw * t);            pt[2].y = (int16_t)bot;
-    pt[3].x = (int16_t)lround(x0);                     pt[3].y = (int16_t)bot;
+    pt[0].x = (int16_t)lround(x0 + sl + fw * t0); pt[0].y = (int16_t)top;
+    pt[1].x = (int16_t)lround(x0 + sl + fw * t1); pt[1].y = (int16_t)top;
+    pt[2].x = (int16_t)lround(x0 + fw * t1);      pt[2].y = (int16_t)bot;
+    pt[3].x = (int16_t)lround(x0 + fw * t0);      pt[3].y = (int16_t)bot;
 }
+
+/* The first t of field i. */
+static void field_poly(const hud_geom *g, int i, double t, hud_point pt[4]) { field_part(g, i, 0, t, pt); }
 
 static void peak_poly(const hud_geom *g, int i, hud_point pt[4])
 {
@@ -230,29 +189,6 @@ static uint8_t color_of(const hud_palette *pal, int zone, int on)
     if (zone == 0) return on ? pal->base_on : pal->base_off;
     if (zone == 1) return on ? pal->yellow_on : pal->yellow_off;
     return on ? pal->red_on : pal->red_off;
-}
-
-/* Segments a..g of a 7-segment digit. Bit 0 is a. */
-static const uint8_t k_seg[10] = { 0x3F, 0x06, 0x5B, 0x4F, 0x66, 0x6D, 0x7D, 0x07, 0x7F, 0x6F };
-
-static void seg_poly(const hud_geom *g, int s, hud_point pt[4])
-{
-    int h = g->gear_h, w = h * 6 / 11, t = h / 7 < 2 ? 2 : h / 7;
-    int x0 = g->gear_cx - w / 2, y0 = g->gear_top, ym = y0 + h / 2 - t / 2, y1 = y0 + h - t;
-    int x = 0, y = 0, sw = 0, sh = 0;
-    switch (s) {
-    case 0: x = x0;         y = y0; sw = w; sh = t; break;              /* a */
-    case 1: x = x0 + w - t; y = y0; sw = t; sh = h / 2; break;          /* b */
-    case 2: x = x0 + w - t; y = ym; sw = t; sh = h - (ym - y0); break;  /* c */
-    case 3: x = x0;         y = y1; sw = w; sh = t; break;              /* d */
-    case 4: x = x0;         y = ym; sw = t; sh = h - (ym - y0); break;  /* e */
-    case 5: x = x0;         y = y0; sw = t; sh = h / 2; break;          /* f */
-    default: x = x0;        y = ym; sw = w; sh = t; break;              /* g */
-    }
-    pt[0].x = (int16_t)x;        pt[0].y = (int16_t)y;
-    pt[1].x = (int16_t)(x + sw); pt[1].y = (int16_t)y;
-    pt[2].x = (int16_t)(x + sw); pt[2].y = (int16_t)(y + sh);
-    pt[3].x = (int16_t)x;        pt[3].y = (int16_t)(y + sh);
 }
 
 int hud_rpm_shown(double rpm) { return rpm <= 0 ? 0 : (int)(rpm / 50.0 + 0.5) * 50; }
@@ -353,7 +289,11 @@ static int draw_backs(emitter *e, const hud_palette *pal, const hud_geom *g, con
     for (zone = 0; zone < 3; zone++)
         for (i = 0; i < HUD_FIELDS; i++) {
             if (hud_field_zone(i) != zone || (!all && i < k->full)) continue;
-            field_poly(g, i, 1.0, pt);
+            /* car run 7 (2026-11-19): a lit part painted over its back did not show, so the partly lit field's back
+               covers only the unlit rest; no two polygons overlap */
+            if (!all && i == k->full && !k->shifting && k->partial_px > 0)
+                field_part(g, i, k->partial_px / field_width(g), 1.0, pt);
+            else field_poly(g, i, 1.0, pt);
             if ((!outline && emit_pen(e, color_of(pal, zone, 0))) || emit_outline(e, pt, 4)) return -1;
         }
     return 0;
@@ -393,18 +333,30 @@ int hud_strip_frame(hud_batch *b, const hud_profile *p, const hud_palette *pal, 
         if (emit_pen(&e, color_of(pal, hud_field_zone(k.peak_field), 1)) || emit_outline(&e, pt, 4)) goto full;
     }
     if (k.gear >= 1 && k.gear <= 9 && g->gear_h > 0) {
-        uint8_t ink = !k.shifting ? pal->ink : pal->shift_on ? pal->shift_on : k.flash_on ? pal->red_on : pal->red_off;
-        if (g->solid_digits) {
-            hud_point dp[HUD_DIGIT_PTS];
-            int dw = digit_w(g->gear_h);
-            int np = hud_digit_poly(k.gear, g->gear_cx - dw / 2, g->gear_top, dw, g->gear_h, digit_t(g->gear_h), dp);
-            if (emit_pen(&e, ink) || emit_outline(&e, dp, (unsigned)np)) goto full;
-        } else
-            for (i = 0; i < 7; i++) {
-                if (!(k_seg[k.gear] >> i & 1)) continue;
-                seg_poly(g, i, pt);
-                if (emit_pen(&e, ink) || emit_outline(&e, pt, 4)) goto full;
-            }
+        uint8_t ink = !k.shifting ? (k.gear_alert && pal->alert ? pal->alert : pal->ink)
+                    : pal->shift_on ? pal->shift_on : k.flash_on ? pal->red_on : pal->red_off;
+        hud_point dp[HUD_DIGIT_PTS];
+        int dw = digit_w(g->gear_h);
+        int np = hud_digit_poly(k.gear, g->gear_cx - dw / 2, g->gear_top, dw, g->gear_h, digit_t(g->gear_h), dp);
+        if (emit_pen(&e, ink) || emit_outline(&e, dp, (unsigned)np)) goto full;
+    }
+    if (k.cam_limit && g->rpm_h > 0 && g->gear_h > 0) {
+        /* Camera alert with the bar (design approved 2026-11-19): the camera in the gap right of the gear, the limit where
+           the revs are, at their size, until 50 m past the camera. Every shape on its own: the HUD draws joins. */
+        hud_point icon[HUD_CAM_ICON_POLYS][HUD_CAM_ICON_PTS], dp[HUD_DIGIT_PTS];
+        unsigned np[HUD_CAM_ICON_POLYS];
+        int dh = g->rpm_h, dw = digit_w(dh), gap = dh / 8 < 2 ? 2 : dh / 8, bottom = g->gear_top + g->gear_h;
+        int n = hud_cam_icon(1, g->gear_cx + digit_w(g->gear_h) / 2 + 5, bottom - 27, icon, np), x = g->rpm_x1 - dw;
+        int v = k.cam_limit;
+        if (emit_pen(&e, hud_cam_ink(pal))) goto full;
+        for (i = 0; i < n; i++)
+            if (emit_flush(&e) || emit_outline(&e, icon[i], np[i])) goto full;
+        do {
+            int c = hud_digit_poly(v % 10, x, bottom - dh, dw, dh, digit_t(dh), dp);
+            if (emit_pen(&e, pal->cam ? pal->cam : pal->ink) || emit_flush(&e) || emit_outline(&e, dp, (unsigned)c)) goto full;
+            x -= dw + gap;
+            v /= 10;
+        } while (v > 0);
     }
     if (k.rpm >= 0) {
         /* Right-aligned, bottom on the gear's, in the ink: the number is read, not the colour. A polygon per digit:

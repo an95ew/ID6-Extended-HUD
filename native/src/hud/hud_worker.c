@@ -12,19 +12,16 @@
  *   --draw-parked [--seconds S] [--trace pull]                  car: demo sweep (or a trace, with gear), no engine data
  *   --draw-live --udp-port N [--collector PATH --host IP]       car: RPM and speed from a drive collector
  *
- * --scene nav makes --dump and --draw-parked show a scripted route instead of the Sport Bar: --route ua (Ukrainian
- * lanes, default) or intl (other languages, hostile text, six lanes). Texts: --lang uk|en|de|pl,
- * --text native|latin (ASCII if the HUD has no Cyrillic), --street-max N (8..32 characters).
- * Common: --most-inst N (talk to 82/N; 82/02 may be the HUD on a 6WB car), --canvas WxH, --handles A,B, --static-handle N, --text-handles STREET,DIST,
+ * Common: --most-inst N (talk to 82/N; 82/02 may be the HUD on a 6WB car), --canvas WxH, --handles A,B, --static-handle N,
  * --palette b0,b1,y0,y1,r0,r1,ink, --settings FILE, --log (every call and answer to stderr).
- * --draw-live: --rg-file PATH (default /var/iap/pps/routeguidance, written by librghook.so in mm-ipod) gives the
- * CarPlay route; no file = no route. The nav scene does not wait for engine frames.
- * --layout big (strip and gear over the whole canvas), --layout split (gear left, RPM right under the strip), --flash-ms N (0 = steady), --shift-hold MS (pull trace),
+ * --draw-live: --cameras PATH (cameras.txt, tools/cameras_build.py) with the GPS the plugin sends (geo_frame) gives the
+ * speed-camera alert; --scene cam makes --dump and --draw-parked show a scripted pass instead (whole picture, then with the bar).
+ * The split layout over the whole --canvas (strip on top, gear left and RPM right under it; --layout split is accepted, the
+ * only one), --flash-ms N (0 = steady), --shift-hold MS (pull trace),
  * --shift-colour N (whole bar in N from the shift point), --backs fill|none|outline (unlit fields),
- * --text-visible (SetVisibility on the text handles: NBT does 210/204 on 6WB 0x1A-0x1C, JayJay3071), --text-clear (big nav
- * below the HUD's texts, no bar; opt-in). Undoing state an earlier run left in the terminal (it outlives us until the HUD
- * sleeps): --hide H,H,... (SetVisibility 0, e.g. 33,34,37,46 after grids), --text-hide (the text handles), --pen-reset
- * (line colour 0 is refused with op F, width 0 accepted).
+ * Undoing state an earlier run left in the terminal (it outlives us until the HUD sleeps): --hide H,H,... (SetVisibility 0,
+ * e.g. 33,34,37,46 after grids, 26,27 for the 6WB text areas), --pen-reset (line colour 0 is refused with op F, width 0
+ * accepted). CarPlay navigation lives on the feature/nav branch.
  * Car modes clear what they drew on exit. */
 #define _POSIX_C_SOURCE 200809L
 #include <arpa/inet.h>
@@ -45,11 +42,9 @@ extern char **environ;
 #include <time.h>
 #include <unistd.h>
 #include "drive_frame.h"
+#include "hud_cam.h"
 #include "hud_most.h"
-#include "hud_nav.h"
-#include "hud_nav_demo.h"
 #include "hud_gear.h"
-#include "hud_rg.h"
 #include "hud_scene.h"
 #include "hud_sender.h"
 #include "hud_strip.h"
@@ -65,9 +60,11 @@ static void on_signal(int s) { (void)s; g_run = 0; }
 
 static struct {
     enum mode mode;
-    const char *trace, *settings, *collector, *host, *rg_file;
-    int rtt, seconds, udp_port, first, last, log, nav, most_inst, container;
-    int swatch_n, swatch_pages, swatch_line, big, trace_set, shift_hold, text_visible, text_hide, pen_reset, nhide;
+    const char *trace, *settings, *collector, *host, *cameras;
+    int cam;   /* --scene cam */
+    int red;   /* --red N: the red fill index for a test; 0 = the settings' red= */
+    int rtt, seconds, udp_port, first, last, log, most_inst, container;
+    int swatch_n, swatch_pages, swatch_line, trace_set, shift_hold, pen_reset, nhide;
     int in_flight, merge, gear_every, pipeline;   /* 0: the defaults (HUD_IN_FLIGHT, the layout's merging, the collector's) */
     uint16_t hide[8];
     const char *show;   /* how --grid/--swatches bring the image up: switch, set or both */
@@ -75,9 +72,6 @@ static struct {
     hud_palette pal;
     hud_geom geom;
     hud_handles hh;
-    hud_text_handles th;
-    hud_text_style text;
-    const char *route;
 } o;
 
 static uint32_t now_ms(void)
@@ -115,12 +109,11 @@ static int usage(void)
     fputs("usage: hud-worker (--dump | --get-size | --probe-sizes A-B | --grid | --swatches FIRST | --draw-parked |"
           " --draw-live --udp-port N) [--most-inst N]"
           " [--trace pull|idle|sweep] [--rtt MS] [--seconds S] [--canvas WxH] [--handles A,B]"
-          " [--scene rpm|nav] [--route ua|intl] [--lang uk|en|de|pl] [--text native|latin] [--street-max N]"
-          " [--static-handle N] [--text-handles S,D] [--palette b0,b1,y0,y1,r0,r1,ink] [--settings FILE] [--rg-file PATH]"
+          " [--scene rpm|cam] [--static-handle N] [--palette b0,b1,y0,y1,r0,r1,ink] [--settings FILE] [--cameras PATH]"
           " [--collector PATH --host IP] [--show switch|set|both] [--container N] [--log]"
-          " [--swatch-n N --swatch-pages P --swatch-line] [--layout big|split] [--flash-ms N] [--shift-hold MS]"
-          " [--shift-colour N] [--backs fill|none|outline] [--text-visible] [--text-clear] [--text-hide] [--pen-reset] [--hide H,H,...]"
-          " [--in-flight N] [--pipeline] [--merge PTS] [--gear-every N]\n", stderr);
+          " [--swatch-n N --swatch-pages P --swatch-line] [--layout split] [--flash-ms N] [--shift-hold MS]"
+          " [--shift-colour N] [--backs fill|none|outline] [--pen-reset] [--hide H,H,...]"
+          " [--in-flight N] [--pipeline] [--merge PTS] [--gear-every N] [--red N]\n", stderr);
     return 2;
 }
 
@@ -129,12 +122,8 @@ static int parse_args(int argc, char **argv)
     int i, v[7];
     hud_profile_b58(&o.prof);
     hud_palette_default(&o.pal);
-    hud_geom_default(&o.geom);
+    hud_geom_split(&o.geom, 120, 72);
     hud_handles_default(&o.hh);
-    hud_text_handles_default(&o.th);
-    hud_text_style_default(&o.text);
-    o.route = "ua";
-    o.rg_file = HUD_RG_FILE;
     o.show = "switch";
     o.trace = "pull";
     o.rtt = 10;
@@ -150,9 +139,6 @@ static int parse_args(int argc, char **argv)
         else if (!strcmp(a, "--draw-live")) o.mode = M_LIVE;
         else if (!strcmp(a, "--log")) o.log = 1;
         else if (!strcmp(a, "--swatch-line")) o.swatch_line = 1;
-        else if (!strcmp(a, "--text-visible")) o.text_visible = 1;
-        /* run 5: the 6WB text areas stay visible after T3 and shade our picture: switch them off */
-        else if (!strcmp(a, "--text-hide")) o.text_hide = 1;
         /* run 4 T0 left both images' pen at width 3 with a line colour; every later draw got outlines (the run-5 "shade") */
         else if (!strcmp(a, "--pen-reset")) o.pen_reset = 1;
         /* run 4 T1a-c left images 33/34, 37 and 46 visible over ours (the run-5 "shade"): SetVisibility(h, 0) first */
@@ -168,7 +154,6 @@ static int parse_args(int argc, char **argv)
             }
             i++;
         }
-        else if (!strcmp(a, "--text-clear")) o.geom.nav_text_top = 1;   /* opt-in (run 5 U2): picture below the texts, no bar */
         else if (!n) return usage();
         else if (!strcmp(a, "--swatches") && !parse_list(n, v, 1) && v[0] <= 240) { o.mode = M_SWATCH; o.first = v[0]; i++; }
         else if (!strcmp(a, "--probe-sizes") && sscanf(n, "%d-%d", &v[0], &v[1]) == 2 && v[0] >= 1 && v[1] >= v[0] &&
@@ -177,7 +162,7 @@ static int parse_args(int argc, char **argv)
         else if (!strcmp(a, "--trace")) { o.trace = n; o.trace_set = 1; i++; }
         else if (!strcmp(a, "--swatch-n") && !parse_list(n, v, 1) && v[0] >= 1 && v[0] <= 8) { o.swatch_n = v[0]; i++; }
         else if (!strcmp(a, "--swatch-pages") && !parse_list(n, v, 1) && v[0] >= 1 && v[0] <= 32) { o.swatch_pages = v[0]; i++; }
-        else if (!strcmp(a, "--layout") && (!strcmp(n, "big") || !strcmp(n, "split"))) { o.big = !strcmp(n, "big") ? 1 : 2; i++; }
+        else if (!strcmp(a, "--layout") && !strcmp(n, "split")) i++;   /* the only layout; the plugin still passes it */
         else if (!strcmp(a, "--shift-colour") && !parse_list(n, v, 1) && v[0] <= 255) { o.pal.shift_on = (uint8_t)v[0]; i++; }
         else if (!strcmp(a, "--backs") && (!strcmp(n, "fill") || !strcmp(n, "none") || !strcmp(n, "outline"))) {
             o.pal.backs = !strcmp(n, "none") ? HUD_BACKS_NONE : !strcmp(n, "outline") ? HUD_BACKS_OUTLINE : HUD_BACKS_FILL; i++;
@@ -188,20 +173,10 @@ static int parse_args(int argc, char **argv)
             o.show = n; i++;
         }
         else if (!strcmp(a, "--container") && !parse_list(n, v, 1) && v[0] >= 1 && v[0] <= 255) { o.container = v[0]; i++; }
-        else if (!strcmp(a, "--scene") && (!strcmp(n, "nav") || !strcmp(n, "rpm"))) { o.nav = !strcmp(n, "nav"); i++; }
-        else if (!strcmp(a, "--route") && !hud_nav_demo_use(n)) { o.route = n; i++; }
-        else if (!strcmp(a, "--lang") && hud_lang_parse(n, strlen(n)) >= 0) { o.text.lang = hud_lang_parse(n, strlen(n)); i++; }
-        else if (!strcmp(a, "--text") && (!strcmp(n, "native") || !strcmp(n, "latin"))) {
-            o.text.script = !strcmp(n, "latin") ? HUD_SCRIPT_LATIN : HUD_SCRIPT_NATIVE; i++;
-        }
-        else if (!strcmp(a, "--street-max") && !parse_list(n, v, 1) && v[0] >= 8 && v[0] <= HUD_TEXT_UNITS) {
-            o.text.street_max = v[0]; i++;
-        }
+        else if (!strcmp(a, "--scene") && (!strcmp(n, "rpm") || !strcmp(n, "cam"))) { o.cam = !strcmp(n, "cam"); i++; }
         else if (!strcmp(a, "--static-handle") && !parse_list(n, v, 1) && v[0] >= 1 && v[0] <= 255) {
             o.hh.static_h = (uint16_t)v[0]; o.hh.static_backs = 1; i++;
         }
-        else if (!strcmp(a, "--text-handles") && !parse_list(n, v, 2) && v[0] >= 1 && v[0] <= 255 && v[1] >= 1 &&
-                 v[1] <= 255) { o.th.street = (uint16_t)v[0]; o.th.distance = (uint16_t)v[1]; i++; }
         else if (!strcmp(a, "--rtt") && !parse_list(n, v, 1) && v[0] <= 2000) { o.rtt = v[0]; i++; }
         /* 2026-11-18 latency: calls awaiting an answer (the factory sends 3), points per merged polygon (0 = one per
            outline), and how often the collector reads the gearbox instead of the DME */
@@ -212,11 +187,12 @@ static int parse_args(int argc, char **argv)
         else if (!strcmp(a, "--seconds") && !parse_list(n, v, 1) && v[0] >= 1 && v[0] <= 3600) { o.seconds = v[0]; i++; }
         else if (!strcmp(a, "--udp-port") && !parse_list(n, v, 1) && v[0] >= 1) { o.udp_port = v[0]; i++; }
         else if (!strcmp(a, "--settings")) { o.settings = n; i++; }
-        else if (!strcmp(a, "--rg-file")) { o.rg_file = n; i++; }
+        else if (!strcmp(a, "--cameras")) { o.cameras = n; i++; }
+        else if (!strcmp(a, "--red") && !parse_list(n, v, 1) && v[0] >= 0 && v[0] <= 255) { o.red = v[0]; i++; }
         else if (!strcmp(a, "--collector")) { o.collector = n; i++; }
         else if (!strcmp(a, "--host")) { o.host = n; i++; }
         else if (!strcmp(a, "--canvas") && sscanf(n, "%dx%d", &v[0], &v[1]) == 2 && v[0] > 0 && v[1] > 0 &&
-                 v[0] <= 4096 && v[1] <= 4096) { hud_geom_for_canvas(&o.geom, v[0], v[1]); i++; }
+                 v[0] <= 4096 && v[1] <= 4096) { hud_geom_split(&o.geom, v[0], v[1]); i++; }
         else if (!strcmp(a, "--handles") && !parse_list(n, v, 2) && v[0] >= 1 && v[0] <= 255 && v[1] >= 1 &&
                  v[1] <= 255) { o.hh.buf[0] = (uint16_t)v[0]; o.hh.buf[1] = (uint16_t)v[1]; i++; }
         else if (!strcmp(a, "--palette") && !parse_list(n, v, 7)) {
@@ -228,8 +204,6 @@ static int parse_args(int argc, char **argv)
     }
     if (o.mode == M_NONE || (o.mode == M_LIVE && !o.udp_port) || (o.collector && !o.host)) return usage();
     if (o.swatch_n && o.first + o.swatch_n * o.swatch_pages > 256) return usage();
-    if (o.big == 1) hud_geom_big(&o.geom, o.geom.canvas_w, o.geom.canvas_h);
-    if (o.big == 2) hud_geom_split(&o.geom, o.geom.canvas_w, o.geom.canvas_h);
     if (o.merge) o.geom.merge_pts = o.merge < 0 ? 0 : o.merge;
     return 0;
 }
@@ -292,27 +266,23 @@ static int sim_send(void *u, const hud_call *c)
 
 /* ---- the drive story: what happens in a real car, for --dump --trace drive ---- */
 
-enum ev_kind { EV_MODE, EV_ROUTE, EV_FACTORY, EV_SPORT_BAR, EV_ALWAYS, EV_NAV };
+enum ev_kind { EV_MODE, EV_FACTORY, EV_SPORT_BAR, EV_ALWAYS };
 
 typedef struct { uint32_t at; enum ev_kind kind; int value; const char *text; } story_event;
 
 static const story_event k_story[] = {
-    {     0, EV_MODE, HUD_MODE_COMFORT, "Ignition on, Comfort. No route yet: the HUD shows only the factory content" },
-    {  4000, EV_ROUTE, 1, "CarPlay: Apple Maps starts a route" },
-    { 14000, EV_MODE, HUD_MODE_SPORT, "Driving experience switch: Sport. The Sport Bar; turns don't interrupt it" },
+    {     0, EV_MODE, HUD_MODE_COMFORT, "Ignition on, Comfort: the HUD shows only the factory content" },
+    { 14000, EV_MODE, HUD_MODE_SPORT, "Driving experience switch: Sport. The Sport Bar" },
     { 30000, EV_MODE, HUD_MODE_SPORT_PLUS, "Driving experience switch: Sport+" },
-    { 48000, EV_ALWAYS, 1, "iDrive menu: Always show Sport Bar, on (Navigation is paused, still ticked)" },
+    { 48000, EV_ALWAYS, 1, "iDrive menu: Always show Sport Bar, on" },
     { 52000, EV_MODE, HUD_MODE_COMFORT, "Driving experience switch: Comfort. Always keeps the Sport Bar" },
     { 58000, EV_FACTORY, 1, "Factory navigation starts guidance: we give the HUD back" },
     { 64000, EV_FACTORY, 0, "Factory navigation finished" },
-    { 68000, EV_ALWAYS, 0, "iDrive menu: Always show Sport Bar, off. Navigation comes back" },
-    { 76000, EV_NAV, 0, "iDrive menu: Navigation, off" },
+    { 68000, EV_ALWAYS, 0, "iDrive menu: Always show Sport Bar, off. Comfort: nothing of ours" },
     { 80000, EV_MODE, HUD_MODE_ECO_PRO, "Driving experience switch: Eco Pro" },
     { 84000, EV_SPORT_BAR, 0, "iDrive menu: Sport Bar, off" },
-    { 86000, EV_NAV, 1, "iDrive menu: Navigation, on. Without the Sport Bar it shows in every mode" },
-    { 92000, EV_MODE, HUD_MODE_SPORT_PLUS, "Driving experience switch: Sport+, still navigation" },
+    { 92000, EV_MODE, HUD_MODE_SPORT_PLUS, "Driving experience switch: Sport+, still nothing" },
     {100000, EV_SPORT_BAR, 1, "iDrive menu: Sport Bar, on. Sport+ shows the bar again" },
-    {112000, EV_ROUTE, 0, "CarPlay: route ended" },
 };
 
 static const char *mode_name(hud_drive_mode m)
@@ -326,20 +296,31 @@ static const char *mode_name(hud_drive_mode m)
     }
 }
 
-/* The gear blinks from the Shift point (owner 2026-11-18: only the gear, 6200..6600, default 6400): past it every new frame
-   flips the digit, so it blinks as fast as the HUD takes frames. Returns what to draw; *off is the phase. */
-static hud_anim blink_view(const hud_anim *a, int blink_rpm, int off)
+/* The gear blinks from the Shift point (owner 2026-11-18: only the gear, 6200..6600, default 6400): past it the next frame
+   flips the digit once a phase has been drawn for BLINK_MS. That is one flip per frame at the run-6 rate (161 ms a frame);
+   owner 2026-11-19: faster frames must not blink faster. Returns what to draw. */
+enum { BLINK_MS = 160 };
+typedef struct { int off, drawn; uint32_t at; } blink_state;
+
+static hud_anim blink_view(const hud_anim *a, int blink_rpm, blink_state *k)
 {
     hud_anim v = *a;
-    if (blink_rpm > 0 && a->rpm >= blink_rpm && off) v.gear = 0;
+    v.gear_alert = blink_rpm > 0 && a->rpm >= blink_rpm;
+    if (!v.gear_alert) k->off = k->drawn = 0;
+    else if (k->drawn && (int32_t)(a->now_ms - k->at) >= BLINK_MS) { k->off = !k->off; k->drawn = 0; }
+    if (v.gear_alert && k->off) v.gear = 0;
     return v;
 }
 
-static int blink_next(const hud_anim *a, int blink_rpm, int off) { return blink_rpm > 0 && a->rpm >= blink_rpm ? !off : 0; }
+/* A frame with the current phase went out: its BLINK_MS start from the first one. */
+static void blink_drawn(const hud_anim *a, blink_state *k)
+{
+    if (!k->drawn) { k->drawn = 1; k->at = a->now_ms; }
+}
 
 static const char *scene_name(hud_scene s)
 {
-    return s == HUD_SCENE_RPM ? "rpm" : s == HUD_SCENE_NAV ? "nav" : "none";
+    return s == HUD_SCENE_RPM ? "rpm" : "none";
 }
 
 /* Cruise in Comfort and Eco Pro: 6th gear, a gentle wave around 1,900 rpm. */
@@ -374,63 +355,103 @@ static void print_batch(uint32_t t, double rpm, int gear, hud_scene scene, const
 
 static void print_event(uint32_t t, const story_event *e, const hud_settings *set, const hud_state *st)
 {
-    const char *paused = hud_nav_paused_reason(set);
     printf("{\"t\":%u,\"event\":", t);
     print_json_string(e->text);
-    printf(",\"mode\":\"%s\",\"settings\":{\"sport_bar\":%d,\"always\":%d,\"nav\":%d,"
-           "\"shift_rpm\":%d},\"route\":%d,\"factory_nav\":%d,\"paused\":",
-           mode_name(st->mode), set->sport_bar, set->always, set->nav, set->shift_rpm,
-           st->route_active, st->factory_nav);
-    if (paused) print_json_string(paused);
-    else fputs("null", stdout);
-    puts("}");
+    printf(",\"mode\":\"%s\",\"settings\":{\"sport_bar\":%d,\"always\":%d,\"cameras\":%d,\"shift_rpm\":%d},"
+           "\"factory_nav\":%d}\n", mode_name(st->mode), set->sport_bar, set->always, set->cameras, set->shift_rpm,
+           st->factory_nav);
 }
 
-static void apply_event(const story_event *e, hud_settings *set, hud_state *st, uint32_t t, uint32_t *route_start)
+static void apply_event(const story_event *e, hud_settings *set, hud_state *st)
 {
     switch (e->kind) {
     case EV_MODE: st->mode = (hud_drive_mode)e->value; break;
-    case EV_ROUTE: st->route_active = e->value; *route_start = t; break;
     case EV_FACTORY: st->factory_nav = e->value; break;
     case EV_SPORT_BAR: set->sport_bar = e->value; break;
     case EV_ALWAYS: set->always = e->value; break;
-    case EV_NAV: set->nav = e->value; break;
     }
 }
 
-/* One loop for every dump: the Sport Bar alone, the navigation alone, or the drive story where the menu
-   settings, the driving mode and the route decide the scene, as hud_scene_select does in the car. */
+/* --scene cam: a camera passed at 90 km/h every 30 s, from 100 m before the warning distance (600 m at 500) to 80 m
+   after it, so a pass takes longer from 800 m; odd passes with the Sport Bar (3200 rpm, 3rd), the limit 50 then 110. */
+static uint32_t cam_pass_ms(int show_m)
+{
+    uint32_t pass = (uint32_t)(show_m + 180) * 40u;   /* ms at 25 m/s: 680 m = 27.2 s, padded to 30 s at 500 m */
+    return pass < 30000u ? 30000u : pass;
+}
+
+static void cam_demo_at(uint32_t t, int show_m, int *dist, int *limit, int *with_bar)
+{
+    uint32_t pass = cam_pass_ms(show_m);
+    *dist = show_m + 100 - (int)(t % pass) * 25 / 1000;
+    *with_bar = (int)(t / pass % 2u);
+    *limit = t / (2u * pass) % 2u ? 110 : 50;
+}
+
+static int cam_shown(int dist, int show_m) { return dist <= show_m && dist >= -HUD_CAM_PAST_M; }
+
+/* The car's red for everything the owner asked red (2026-11-19), when settings red=N names one: the lit 6000+ zone, the
+   gear's blink, the camera. */
+static void apply_red(hud_palette *pal, const hud_palette *base, int red, int cam_orange)
+{
+    *pal = *base;
+    if (red > 0) { pal->alert = (uint8_t)red; pal->red_on = (uint8_t)red; }
+    if (cam_orange) pal->cam = 5;   /* orange (runs 2-3); the menu's Orange camera warning */
+}
+
+static void read_settings(hud_settings *st);
+
+static int load_cameras(hud_cam *cams, int max)
+{
+    char *buf;
+    FILE *f;
+    long size;
+    size_t n;
+    int c;
+    if (!o.cameras || !(f = fopen(o.cameras, "r"))) return 0;
+    /* any size: a country's list (tools/cameras_sources.json) may run to a few hundred KB */
+    if (fseek(f, 0, SEEK_END) != 0 || (size = ftell(f)) < 0 || fseek(f, 0, SEEK_SET) != 0 ||
+        !(buf = malloc((size_t)size + 1))) {
+        fclose(f);
+        return 0;
+    }
+    n = fread(buf, 1, (size_t)size, f);
+    fclose(f);
+    c = hud_cams_parse(buf, n, cams, max);
+    free(buf);
+    fprintf(stderr, "[hud] cameras: %d from %s\n", c, o.cameras);
+    return c;
+}
+
+/* One loop for every dump: the Sport Bar alone, the camera pass, or the drive story where the menu settings and the
+   driving mode decide the scene, as hud_scene_select does in the car. */
 static int run_dump(void)
 {
     hud_sender s;
     hud_anim a;
     hud_batch b;
     hud_strip_key last_key;
-    hud_nav_info nav;
-    hud_nav_sent nav_sent;
     hud_settings set;
     hud_state st;
     hud_scene scene, last_scene = HUD_SCENE_NONE;
-    int shown = 0, have_key = 0, story = !strcmp(o.trace, "drive"), drawn = 0, blink_off = 0, drawn_gear = 0;
+    int shown = 0, have_key = 0, story = !strcmp(o.trace, "drive"), drawn = 0, drawn_gear = 0, cam_key = -1;
+    blink_state blink = { 0, 0, 0 };
     unsigned next_ev = 0;
-    uint32_t t, end = (uint32_t)o.seconds * 1000u, frames = 0, route_start = 0;
+    uint32_t t, end = (uint32_t)o.seconds * 1000u, frames = 0;
     hud_sender_init(&s, sim_send, NULL);
     if (o.in_flight) hud_sender_set_window(&s, (unsigned)o.in_flight);
     hud_sender_set_pipeline(&s, o.pipeline);
     hud_anim_reset(&a);
     hud_settings_default(&set);
-    set.text = o.text;
+    read_settings(&set);   /* --settings: cam_dist, cam_orange, red for the camera pass */
     memset(&st, 0, sizeof st);
-    memset(&nav_sent, 0, sizeof nav_sent);
     st.mode = HUD_MODE_COMFORT;
     if (story) end = 118000;
-    else if (o.nav) { st.route_active = 1; end = hud_nav_demo_length_ms(); }
-    printf("{\"canvas\":[%d,%d],\"handles\":[%u,%u],\"text_handles\":[%u,%u],\"rtt\":%d,\"story\":%d,"
-           "\"route\":\"%s\",\"lang\":\"%s\",\"text\":\"%s\",\"street_max\":%d,"
+    else if (o.cam) end = 2u * cam_pass_ms(set.cam_dist);
+    apply_red(&o.pal, &o.pal, o.red ? o.red : set.red, set.cam_orange);
+    printf("{\"canvas\":[%d,%d],\"handles\":[%u,%u],\"rtt\":%d,\"story\":%d,\"cam_dist\":%d,\"cam_ink\":%u,"
            "\"profile\":[%d,%d,%d,%d],\"palette\":[%u,%u,%u,%u,%u,%u,%u]}\n",
-           o.geom.canvas_w, o.geom.canvas_h, o.hh.buf[0], o.hh.buf[1], o.th.street, o.th.distance, o.rtt, story,
-           o.route, hud_lang_name(o.text.lang), o.text.script == HUD_SCRIPT_LATIN ? "latin" : "native",
-           o.text.street_max,
+           o.geom.canvas_w, o.geom.canvas_h, o.hh.buf[0], o.hh.buf[1], o.rtt, story, set.cam_dist, hud_cam_ink(&o.pal),
            o.prof.lo, o.prof.yellow, o.prof.red, o.prof.shift,
            o.pal.base_off, o.pal.base_on, o.pal.yellow_off, o.pal.yellow_on, o.pal.red_off, o.pal.red_on, o.pal.ink);
     if (o.hh.static_backs) {
@@ -444,17 +465,23 @@ static int run_dump(void)
         unsigned i;
         g_sim_now = t;
         while (story && next_ev < sizeof k_story / sizeof k_story[0] && k_story[next_ev].at <= t) {
-            apply_event(&k_story[next_ev], &set, &st, t, &route_start);
+            apply_event(&k_story[next_ev], &set, &st);
             print_event(t, &k_story[next_ev], &set, &st);
             next_ev++;
         }
-        if (story && st.mode != HUD_MODE_SPORT && st.mode != HUD_MODE_SPORT_PLUS) cruise_at(t, &rpm, &kph);
-        else if (o.nav && !story) cruise_at(t, &rpm, &kph);
+        int cam_mode = 0, cam_dist = 0, cam_limit = 0, with_bar = 0;
+        if (o.cam) cam_demo_at(t, set.cam_dist, &cam_dist, &cam_limit, &with_bar);
+        if (o.cam) { rpm = 3200; kph = 90; }
+        else if (story && st.mode != HUD_MODE_SPORT && st.mode != HUD_MODE_SPORT_PLUS) cruise_at(t, &rpm, &kph);
         else trace_at(story ? "pull" : o.trace, t, &rpm, &kph);
         hud_anim_step(&a, rpm, t);
         a.gear = hud_gear_estimate(rpm, kph);
-        if (st.route_active) hud_nav_demo_at(t - route_start, &nav);
-        scene = story ? hud_scene_select(&set, &st) : o.nav ? HUD_SCENE_NAV : HUD_SCENE_RPM;
+        scene = story ? hud_scene_select(&set, &st) : HUD_SCENE_RPM;
+        if (o.cam) {
+            scene = with_bar ? HUD_SCENE_RPM : HUD_SCENE_NONE;
+            cam_mode = cam_shown(cam_dist, set.cam_dist) ? (with_bar ? 1 : 2) : 0;
+            if (!with_bar) a.gear = 0;
+        }
         for (i = 0; i < g_nsim;)
             if (g_sim[i].due <= t) {
                 sim_answer x = g_sim[i];
@@ -467,24 +494,34 @@ static int run_dump(void)
         if (!hud_sender_ready(&s)) continue;
         hud_batch_init(&b);
         if (scene != last_scene) {   /* leaving a scene: take down what only it draws */
-            if (last_scene == HUD_SCENE_NAV) hud_nav_clear(&b, &o.th, &nav_sent);
             if (scene == HUD_SCENE_NONE && drawn) { hud_strip_clear(&b, &o.hh); drawn = 0; }
             have_key = 0;
-            nav_sent.have_image = 0;
             last_scene = scene;
         }
-        if (scene == HUD_SCENE_RPM) {
-            hud_anim v = blink_view(&a, set.blink_rpm, blink_off);
-            hud_strip_key k = hud_strip_key_of(&o.prof, &o.geom, &v);
+        if (cam_mode == 2) {
+            int key = cam_limit * 1000 + (cam_dist > 0 ? cam_dist / 10 : -1) + 1;
+            if (key != cam_key) {
+                if (hud_cam_frame(&b, &o.pal, &o.hh, cam_limit, cam_dist, set.cam_dist, &shown) > 0) drawn = 1;
+                cam_key = key;
+                have_key = 0;
+            }
+        } else if (o.cam && scene == HUD_SCENE_NONE && drawn) {
+            hud_strip_clear(&b, &o.hh);
+            drawn = 0;
+            cam_key = -1;
+        } else if (scene == HUD_SCENE_RPM) {
+            hud_anim v = blink_view(&a, set.blink_rpm, &blink);
+            hud_strip_key k;
+            cam_key = -1;
+            v.cam_limit = cam_mode == 1 ? cam_limit : 0;
+            k = hud_strip_key_of(&o.prof, &o.geom, &v);
             if (!have_key || !hud_strip_key_equal(&k, &last_key)) {
                 if (hud_strip_frame(&b, &o.prof, &o.pal, &o.geom, &o.hh, &v, &shown) > 0) drawn = 1;
-                blink_off = blink_next(&a, set.blink_rpm, blink_off);
+                blink_drawn(&a, &blink);
                 drawn_gear = v.gear;
                 last_key = k;
                 have_key = 1;
             }
-        } else if (scene == HUD_SCENE_NAV) {
-            if (hud_nav_frame(&b, &nav, &o.pal, &o.geom, &o.hh, &o.th, &set.text, &nav_sent, &shown) > 0) drawn = 1;
         }
         if (b.n) {
             hud_sender_submit(&s, &b, t);
@@ -609,14 +646,11 @@ static int run_car(void)
     hud_batch b;
     hud_anim a;
     hud_settings set;
-    hud_nav_info nav;
-    hud_nav_sent nav_sent;
     hud_strip_key last_key;
-    int shown = 0, have_key = 0, drawn = 0, fd = -1, blink_off = 0;
+    int shown = 0, have_key = 0, drawn = 0, fd = -1;
+    blink_state blink = { 0, 0, 0 };
     pid_t child = -1;
-    hud_rg_file rgf;
-    hud_rg_track rgt;
-    uint32_t start, next_stats, next_settings = 0, next_rg = 0;
+    uint32_t start, next_stats, next_settings = 0;
     /* each value with the time it arrived (0 = never) and its source, as the collector and the plugin's CDS feed them */
     hud_live live;
     int cur_merge = -1, layout_merge = o.geom.merge_pts;
@@ -625,6 +659,12 @@ static int run_car(void)
     int lag_wait = 0;
     double rpm = 0, kph = 0;
     enum hud_most_rc rc;
+    static hud_cam cams[HUD_CAM_MAX];
+    hud_cam_track trk;
+    struct geo_frame geo;
+    hud_palette pal_base = o.pal;
+    int ncam = 0, cam_key = -1, cam_logged = -1, ink_red = -1, ink_orange = -1;
+    uint32_t geo_at = 0, next_cam = 0, next_heading_log = 0;
     hud_most_set_instance((uint8_t)o.most_inst);
     rc = hud_most_open(5000);
     if (rc != HUD_MOST_UP) {
@@ -637,13 +677,12 @@ static int run_car(void)
     if (o.in_flight) hud_sender_set_window(&s, (unsigned)o.in_flight);
     hud_sender_set_pipeline(&s, o.pipeline);
     hud_settings_default(&set);
-    set.text = o.text;   /* until a settings file says otherwise */
-    hud_rg_file_init(&rgf, o.rg_file);
-    hud_rg_track_init(&rgt);
+    read_settings(&set);   /* the parked camera pass takes cam_dist and cam_orange from it too */
+    hud_cam_track_init(&trk);
+    memset(&geo, 0, sizeof geo);
+    apply_red(&o.pal, &pal_base, o.red ? o.red : set.red, set.cam_orange);
     hud_anim_reset(&a);
     hud_live_init(&live);
-    memset(&nav, 0, sizeof nav);
-    memset(&nav_sent, 0, sizeof nav_sent);
     start = next_stats = g_t0 = now_ms();
 
     if (o.mode == M_SIZE) {
@@ -711,12 +750,13 @@ static int run_car(void)
         drawn = 1;
     }
     if (o.mode == M_LIVE) {
+        ncam = load_cameras(cams, HUD_CAM_MAX);
         if (o.collector) child = spawn_collector();
         fd = open_udp(o.udp_port);
         if (fd < 0) fprintf(stderr, "[hud] UDP port %d: %s\n", o.udp_port, strerror(errno));
     }
     if (o.mode == M_PARKED || o.mode == M_LIVE) {
-        if (o.container || (o.nav && o.text_visible) || o.text_hide || o.pen_reset || o.nhide) {
+        if (o.container || o.pen_reset || o.nhide) {
             int k;
             hud_batch_init(&b);
             for (k = 0; k < o.nhide; k++) hud_set_visibility(&b, o.hide[k], 0);
@@ -727,13 +767,6 @@ static int run_car(void)
                 hud_line_width(&b, o.hh.buf[1], 0);
             }
             if (o.container) hud_set_visibility(&b, (uint16_t)o.container, 1);
-            if (o.nav && o.text_visible) {
-                hud_set_visibility(&b, o.th.street, 1);
-                hud_set_visibility(&b, o.th.distance, 1);
-            } else if (o.text_hide) {
-                hud_set_visibility(&b, o.th.street, 0);
-                hud_set_visibility(&b, o.th.distance, 0);
-            }
             hud_sender_submit(&s, &b, now_ms());
             wait_idle(&s, 3000);
         }
@@ -746,16 +779,30 @@ static int run_car(void)
         while (g_run && (o.mode == M_LIVE || (int32_t)(now_ms() - start) < o.seconds * 1000)) {
             uint32_t t = now_ms();
             hud_scene scene = HUD_SCENE_RPM;
-            if (o.mode == M_PARKED && o.nav) {
-                hud_nav_demo_at(t - start, &nav);
-                scene = HUD_SCENE_NAV;
+            int cam_mode = 0, cam_dist = 0, cam_limit = 0;   /* 1: badge with the bar, 2: the whole picture */
+            if (o.mode == M_PARKED && o.cam) {
+                int with_bar;
+                cam_demo_at(t - start, set.cam_dist, &cam_dist, &cam_limit, &with_bar);
+                rpm = 3200;
+                a.gear = with_bar ? 3 : 0;
+                scene = with_bar ? HUD_SCENE_RPM : HUD_SCENE_NONE;
+                cam_mode = cam_shown(cam_dist, set.cam_dist) ? (with_bar ? 1 : 2) : 0;
             } else if (o.mode == M_PARKED) {
                 trace_at(o.trace_set ? o.trace : "sweep", t - start, &rpm, &kph);
                 a.gear = o.trace_set ? hud_gear_estimate(rpm, kph) : 0;
             } else {
                 struct drive_frame f;
                 hud_state st;
-                while (fd >= 0 && recv(fd, &f, sizeof f, 0) == (ssize_t)sizeof f) {
+                union { struct drive_frame d; struct geo_frame g; unsigned char raw[64]; } in;
+                ssize_t got;
+                while (fd >= 0 && (got = recv(fd, &in, sizeof in, 0)) > 0) {
+                    if (got == (ssize_t)sizeof in.g && in.g.magic == GEO_MAGIC) {   /* the car's position (plugin, CDS) */
+                        geo = in.g;
+                        geo_at = t ? t : 1;
+                        continue;
+                    }
+                    if (got != (ssize_t)sizeof in.d) continue;
+                    f = in.d;
                     if (f.rpm >= 0) last_sample = (uint32_t)f.sampled_ms;   /* the collector's CLOCK_MONOTONIC, same node */
                     if (hud_live_feed(&live, &f, t))
                         fprintf(stderr, "[hud] driving mode raw %d from %s: %s\n", f.mode_raw,
@@ -764,6 +811,15 @@ static int run_car(void)
                 if ((int32_t)(t - next_settings) >= 0) {
                     read_settings(&set);
                     next_settings = t + 1000;
+                    if ((!o.red && set.red != ink_red) || set.cam_orange != ink_orange) {
+                        ink_red = o.red ? ink_red : set.red;
+                        ink_orange = set.cam_orange;
+                        apply_red(&o.pal, &pal_base, o.red ? o.red : set.red, set.cam_orange);
+                        have_key = 0;
+                        cam_key = -1;
+                        fprintf(stderr, "[hud] red: %d, camera colour: %u\n", o.red ? o.red : set.red, hud_cam_ink(&o.pal));
+                    }
+                    trk.show_m = set.cam_dist;
                     /* the latency knobs (car run 6 tunes them in settings.txt); a command-line value wins */
                     if (!o.in_flight && s.window != (unsigned)set.in_flight) {
                         hud_sender_set_window(&s, (unsigned)set.in_flight);
@@ -780,16 +836,6 @@ static int run_car(void)
                 memset(&st, 0, sizeof st);
                 /* unknown (no source, or a value not mapped yet) counts as Comfort: the bar needs Always */
                 st.mode = hud_live_mode(&live, t);
-                if ((int32_t)(t - next_rg) >= 0) {   /* the CarPlay route (librghook's file) */
-                    int was = rgt.route_active;
-                    if (hud_rg_file_poll(&rgf)) hud_rg_track_update(&rgt, rgf.present ? &rgf.rg : NULL);
-                    if (was != rgt.route_active)
-                        fprintf(stderr, "[hud] CarPlay route %s (route_state %d)\n", rgt.route_active ? "started" : "ended",
-                                rgf.present ? rgf.rg.route_state : -1);
-                    next_rg = t + 250;
-                }
-                st.route_active = rgt.route_active;
-                if (rgt.route_active) nav = rgt.nav;
                 scene = hud_scene_select(&set, &st);
                 /* Owner 2026-11-18: the bar only with the engine running and the gearbox in D, S or M, from the car's own
                    values; engine off (0 rpm), P, N, R, a gearbox value not mapped yet or no fresh data: nothing of ours. */
@@ -800,31 +846,64 @@ static int run_car(void)
                     hud_anim_reset(&a);
                     rpm = 0;
                 }
+                if (ncam && (int32_t)(t - next_cam) >= 0) {   /* the camera ahead, from the GPS (fresh only) */
+                    hud_geo_fix fx;
+                    fx.valid = set.cameras && geo_at && (uint32_t)(t - geo_at) < GEO_STALE_MS;
+                    fx.lat_e6 = geo.lat_e6;
+                    fx.lon_e6 = geo.lon_e6;
+                    fx.heading = geo.heading >= 0 && geo.heading < 360 ? geo.heading : -1;
+                    if (hud_cam_track_update(&trk, cams, ncam, &fx) && (trk.active ? trk.idx : -1) != cam_logged) {
+                        cam_logged = trk.active ? trk.idx : -1;
+                        fprintf(stderr, "[hud] camera %s: #%d %d m, limit %d, heading %d\n", trk.active ? "ahead" : "none",
+                                trk.idx, trk.dist_m, trk.limit, trk.heading);
+                    }
+                    if (fx.valid && trk.track_heading >= 0 && (int32_t)(t - next_heading_log) >= 0) {
+                        /* car run 8 G1: the CDS heading (after the CCW -> CW turn in hud_cds.c) against the GPS track */
+                        fprintf(stderr, "[hud] heading: cds %d, track %d\n", fx.heading, trk.track_heading);
+                        next_heading_log = t + 5000;
+                    }
+                    next_cam = t + 200;
+                }
+                /* only with the engine running (parked at home is not driving past a camera), never over the factory nav */
+                if (trk.active && trk.limit > 0 && set.cameras && !st.factory_nav && rpm > 0) {
+                    cam_dist = trk.dist_m;
+                    cam_limit = trk.limit;
+                    cam_mode = scene == HUD_SCENE_RPM ? 1 : 2;
+                }
             }
             hud_anim_step(&a, rpm, t);
             pump(&s);
             if (hud_sender_ready(&s)) {
-                if (scene == HUD_SCENE_RPM) {
-                    hud_anim v = blink_view(&a, set.blink_rpm, blink_off);
-                    hud_strip_key k = hud_strip_key_of(&o.prof, &o.geom, &v);
+                if (cam_mode == 2) {   /* the whole picture: redrawn every 10 m (the bar), not every loop */
+                    int key = cam_limit * 1000 + (cam_dist > 0 ? cam_dist / 10 : -1) + 1;
+                    if (key != cam_key) {
+                        hud_batch_init(&b);
+                        if (hud_cam_frame(&b, &o.pal, &o.hh, cam_limit, cam_dist, set.cam_dist, &shown) > 0) {
+                            hud_sender_submit(&s, &b, t);
+                            drawn = 1;
+                        }
+                        cam_key = key;
+                        have_key = 0;
+                    }
+                } else if (scene == HUD_SCENE_RPM) {
+                    hud_anim v = blink_view(&a, set.blink_rpm, &blink);
+                    hud_strip_key k;
+                    cam_key = -1;
+                    v.cam_limit = cam_mode == 1 ? cam_limit : 0;
+                    k = hud_strip_key_of(&o.prof, &o.geom, &v);
                     if (!have_key || !hud_strip_key_equal(&k, &last_key)) {
                         hud_batch_init(&b);
                         if (hud_strip_frame(&b, &o.prof, &o.pal, &o.geom, &o.hh, &v, &shown) > 0) {
                             hud_sender_submit(&s, &b, t);
-                            blink_off = blink_next(&a, set.blink_rpm, blink_off);
+                            blink_drawn(&a, &blink);
                             /* lag: from the revs' sample to this frame's last answer */
                             if (o.mode == M_LIVE && a.have && !lag_wait) { lag_sample = last_sample; lag_done = s.st.done; lag_wait = 1; }
                         }
                         last_key = k;
                         have_key = drawn = 1;
                     }
-                } else if (scene == HUD_SCENE_NAV) {
-                    hud_batch_init(&b);
-                    if (hud_nav_frame(&b, &nav, &o.pal, &o.geom, &o.hh, &o.th, &set.text, &nav_sent, &shown) > 0) {
-                        hud_sender_submit(&s, &b, t);
-                        drawn = 1;
-                    }
                 } else if (drawn) {
+                    cam_key = -1;
                     hud_batch_init(&b);
                     hud_strip_clear(&b, &o.hh);
                     hud_sender_submit(&s, &b, t);
@@ -852,11 +931,6 @@ static int run_car(void)
         wait_idle(&s, 2000);
         hud_batch_init(&b);
         hud_strip_clear(&b, &o.hh);
-        if (nav_sent.have_text) hud_nav_clear(&b, &o.th, &nav_sent);
-        if (o.nav && o.text_visible) {   /* leave the text areas as we found them (run 5: they shade our picture) */
-            hud_set_visibility(&b, o.th.street, 0);
-            hud_set_visibility(&b, o.th.distance, 0);
-        }
         hud_sender_submit(&s, &b, now_ms());
         wait_idle(&s, 2000);
     }
