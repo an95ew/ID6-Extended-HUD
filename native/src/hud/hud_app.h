@@ -12,7 +12,7 @@
 #define HUD_APP_PLUGINS "/var/opt/hmi/data/ID5/Plugins"
 enum { HUD_APP_UDP_PORT = 42873, HUD_APP_MAX_ARGS = 40 };
 
-typedef enum { HUD_APP_SPORT_BAR, HUD_APP_ALWAYS, HUD_APP_NAV } hud_app_item;
+typedef enum { HUD_APP_SPORT_BAR, HUD_APP_ALWAYS, HUD_APP_CAMERAS, HUD_APP_CAM_ORANGE } hud_app_item;
 
 /* The installed defaults: the driving mode is not wired yet (deploy plan, version 1), so "Always" starts ticked or
    the Sport Bar would never show. */
@@ -21,7 +21,8 @@ void hud_app_defaults(hud_settings *s);
 void hud_app_load(hud_settings *s, const char *dir);
 /* Writes dir/settings.txt through a temporary file and a rename, so the worker never reads half a file. 0 or -1. */
 int hud_app_save(const hud_settings *s, const char *dir);
-/* Flips one menu item. "Always" only while Sport Bar is ticked (owner, 2026-11-18: it greys out). */
+/* Flips one menu item. "Always" only while Sport Bar is ticked (owner, 2026-11-18: it greys out), the orange colour only
+   while the camera warning is. */
 void hud_app_toggle(hud_settings *s, hud_app_item item);
 /* The Shift point page's values (owner 2026-11-18), in menu order. */
 enum { HUD_APP_BLINK_CHOICES = 5 };
@@ -30,6 +31,13 @@ extern const int hud_app_blink_rpm[HUD_APP_BLINK_CHOICES];
 void hud_app_set_blink(hud_settings *s, int i);
 /* The Shift point page's label, e.g. "Gear blinks from 6,400 RPM". */
 void hud_app_blink_label(const hud_settings *s, char *out, size_t cap);
+/* The Warning distance page's values (owner 2026-11-20), in menu order. */
+enum { HUD_APP_CAM_DIST_CHOICES = 3 };
+extern const int hud_app_cam_dist_m[HUD_APP_CAM_DIST_CHOICES];
+/* Takes choice i (0..2) of the Warning distance page; anything else leaves the setting. */
+void hud_app_set_cam_dist(hud_settings *s, int i);
+/* The Warning distance page's label, e.g. "Warning from 500 m before the camera". */
+void hud_app_cam_dist_label(const hud_settings *s, char *out, size_t cap);
 /* The worker runs (and polls the engine) only while something is ticked. */
 int hud_app_wants_worker(const hud_settings *s);
 /* Another HUD sender installed next to ours (two senders freeze the HUD: home repo #22/#27): its folder name, or NULL. */

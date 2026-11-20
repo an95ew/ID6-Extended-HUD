@@ -3,6 +3,7 @@ import json
 import os
 import subprocess
 import sys
+import tempfile
 
 HERE = os.path.dirname(os.path.abspath(__file__))
 WORKER = os.path.join(HERE, "..", "build", "hud-worker")
@@ -87,60 +88,24 @@ def check_dump():
     assert len(fs_static) > len(fs)
 
 
-def text_of(call):
-    b = bytes.fromhex(call.split(":")[1])
-    return b[3:-2].decode("utf-16-be")
-
-
-def check_nav():
-    head, fs, err = frames("--scene", "nav", "--rtt", "10")
-    assert head["text_handles"] == [2, 3] and "0 timeouts" in err
-    texts = set()
-    for f in fs:
-        assert f["scene"] == "nav" and 0 < len(f["calls"]) <= 48
-        for c in f["calls"]:
-            assert c[:3] in ("210", "220", "21B", "21D", "20E"), c
-            if c.startswith("210:"):
-                texts.add(text_of(c))
-    for want in ("просп. Берестейський", "вул. Хрещатик", "Південний міст", "вул. Велика Васильк.", "траса М-06",
-                 "вул. Сагайдачного 25", "Ви прибули", "1.5 км", "Зараз"):
-        assert want in texts, want
-    assert all(len(t) <= 20 and "," not in t for t in texts)   # the cluster drops commas
-    # The Latin fallback and the international route: only ASCII, and the hostile texts come out clean.
-    _, fs, _ = frames("--scene", "nav", "--rtt", "10", "--text", "latin")
-    latin = {text_of(c) for f in fs for c in f["calls"] if c.startswith("210:")}
-    assert "prosp. Beresteiskyi" in latin and "Vy prybuly" in latin and all(t.isascii() for t in latin), latin
-    head, fs, err = frames("--scene", "nav", "--rtt", "10", "--route", "intl", "--lang", "en")
-    assert head["route"] == "intl" and head["lang"] == "en" and "0 timeouts" in err
-    intl = {text_of(c) for f in fs for c in f["calls"] if c.startswith("210:")}
-    for want in ("Str. des 17. Juni", "ul. Marszałkowska", "Ave des Champs-Élys.", 'вул. "Київська"', "Обхід ремонту",
-                 "Oxford St", "Kärntner Str. 12", "Arrived", "1.2 km"):
-        assert want in intl, (want, intl)
-    assert all(0x20 <= ord(ch) < 0xFFFE and ch not in "\u200e\u00a0" for t in intl for ch in t)
-
-
 def check_story():
     r = run("--dump", "--trace", "drive", "--rtt", "10")
     assert r.returncode == 0, r.stderr
     lines = [json.loads(x) for x in r.stdout.splitlines()][1:]
     events = [x for x in lines if "event" in x]
     frames_ = [x for x in lines if "calls" in x]
-    assert len(events) == 16
-    assert {f["scene"] for f in frames_} == {"rpm", "nav", "none"}
+    assert len(events) == 12
+    assert {f["scene"] for f in frames_} == {"rpm", "none"}
 
     def scenes_between(a, b):
         return {f["scene"] for f in frames_ if a <= f["t"] < b}
-    assert scenes_between(0, 4000) == set()            # Comfort, no route: we draw nothing
-    assert scenes_between(4000, 14000) == {"nav"}      # Comfort with a route
-    assert scenes_between(14000, 68000) <= {"rpm", "none"}   # Sport, Sport+, Always: never navigation
-    assert "rpm" in scenes_between(14000, 30000)
+    assert scenes_between(0, 14000) == set()            # Comfort: we draw nothing
+    assert "rpm" in scenes_between(14000, 30000)        # Sport, Sport+
     assert scenes_between(48000, 58000) == {"rpm"}     # Always, also after Comfort
     assert scenes_between(58000, 64000) == {"none"}    # factory navigation owns the HUD
-    assert scenes_between(76000, 86000) <= {"none"}    # Navigation off, Eco Pro
-    assert scenes_between(86000, 100000) == {"nav"}    # Sport Bar off: navigation even in Sport+
-    assert scenes_between(100100, 118000) <= {"rpm"}   # Sport Bar on again in Sport+: the bar, near turns too
-    paused = [e for e in events if e["paused"]]
-    assert paused and all(e["settings"]["nav"] == 1 for e in paused)   # Always pauses, never unticks
+    assert scenes_between(68100, 100000) <= {"none"}   # Always off in Comfort, Eco Pro, Sport Bar off
+    assert "rpm" in scenes_between(100000, 118000)     # Sport Bar on again in Sport+
+    assert all("nav" not in e["settings"] for e in events)   # Navigation lives on the feature/nav branch
     # The scene changes only on an event: no switching back and forth on its own.
     ev_t = [e["t"] for e in events]
     last_scene, since = None, 0
@@ -176,13 +141,27 @@ def check_camera():
     badge = [f for f in bar if any(c.endswith("09") and c.startswith("21B:") for c in f["calls"])]
     assert badge and all(len(f["calls"]) <= 20 for f in badge)
     assert any(f["t"] > 56000 or not any(c.startswith("21B:") and c.endswith("09") for c in f["calls"]) for f in bar[-1:])
+    # Orange camera warning and the 800 m Warning distance (iDrive menu, owner 2026-11-20), from settings.txt
+    with tempfile.NamedTemporaryFile("w", suffix=".txt", delete=False) as t:
+        t.write("cam_dist=800\ncam_orange=1\n")
+    try:
+        head, fs, err = frames("--scene", "cam", "--rtt", "260", "--in-flight", "32", "--pipeline", "--layout", "split",
+                               "--canvas", "120x72", "--handles", "31,32", "--palette", "3,4,3,4,3,4,4",
+                               "--settings", t.name)
+    finally:
+        os.unlink(t.name)
+    assert head["cam_dist"] == 800 and head["cam_ink"] == 5 and "0 timeouts" in err
+    pass_ms = (800 + 180) * 40                               # 39.2 s a pass at 25 m/s, from 900 m to 80 m past
+    whole = [f for f in fs if f["t"] < pass_ms and len(f["calls"]) > 4]
+    first, last = whole[0]["t"], whole[-1]["t"]
+    assert 3900 <= first <= 4300 and 35800 <= last <= 36300, (first, last)   # 900 m -> 800 m: 4 s; at it: 36 s
+    assert all(any(c == "21B:%04x05" % int(f["calls"][0][4:8], 16) for c in f["calls"]) for f in whole)
 
 
 if __name__ == "__main__":
     check_gear_blink()
     check_blink_rate()
     check_dump()
-    check_nav()
     check_story()
     check_car_modes_without_dsi()
     check_camera()

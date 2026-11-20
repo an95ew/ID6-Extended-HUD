@@ -21,8 +21,9 @@ enum { HUD_BACKS_FILL, HUD_BACKS_NONE, HUD_BACKS_OUTLINE };
 /* shift_on (0 = the zone colours) lights the whole bar in one colour from the shift point: the HUD has no red, so the
    cue is dim -> bright (run 3: 3 looks red-orange at night, 4 white). backs: how unlit fields show; NONE when the lit
    colour is the unlit one, OUTLINE draws them in line colour base_off with fill 0 (untested on the car). */
-/* alert (0 = none known): the red the owner asked for (2026-11-19) for the gear's blink and the camera; settings red=N. */
-typedef struct { uint8_t base_off, base_on, yellow_off, yellow_on, red_off, red_on, ink, shift_on; int backs; uint8_t alert; } hud_palette;
+/* alert (0 = none known): the red the owner asked for (2026-11-19) for the gear's blink and the camera; settings red=N.
+   cam (0 = alert, else ink): the camera warning's colour, 5 (orange) with settings cam_orange=1 (owner 2026-11-20). */
+typedef struct { uint8_t base_off, base_on, yellow_off, yellow_on, red_off, red_on, ink, shift_on; int backs; uint8_t alert, cam; } hud_palette;
 
 /* Layout in HUD canvas units. Defaults come from the design gallery's 480x180 canvas. */
 typedef struct {
@@ -30,8 +31,6 @@ typedef struct {
     int x, y, w, h;                  /* the strip */
     int gap, slant;
     int gear_cx, gear_top, gear_h;   /* 7-segment gear digit; gear_h 0 hides it */
-    int nav_x0;                      /* the nav scene's design x (of 480) at canvas x 0: 0, or 240 for the big layout */
-    int nav_text_top;                /* big layout: the HUD's own 0x1A/0x1B texts sit over the image's top (run 4 T3), keep it free */
     int rise;                        /* red fields stand this much taller, yellow half: the HUD has no red (run 3) */
     int rpm_x1, rpm_h;               /* RPM readout, right-aligned at rpm_x1, bottom on the gear's; rpm_h 0 hides it */
     int solid_digits;                /* 1: each digit is one polygon (holes as keyholes), 0: one polygon per segment */
@@ -63,6 +62,8 @@ void hud_profile_b58(hud_profile *p);
 /* Moves the zones with the bar's end (the shift point): yellow 2000 below it, red 1000 below it. */
 void hud_profile_for_shift(hud_profile *p, int shift);
 void hud_palette_default(hud_palette *p);
+/* The camera's colour: cam, else alert, else ink. */
+uint8_t hud_cam_ink(const hud_palette *p);
 void hud_geom_default(hud_geom *g);
 /* Scales the default layout to a canvas reported by ImageGetSize. */
 void hud_geom_for_canvas(hud_geom *g, int canvas_w, int canvas_h);

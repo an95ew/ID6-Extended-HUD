@@ -12,7 +12,7 @@
 
 enum {
     HUD_CAM_MAX = 1024,
-    HUD_CAM_SHOW_M = 500,       /* appears this far before the camera */
+    HUD_CAM_SHOW_M = 500,       /* appears this far before the camera (the default; settings cam_dist) */
     HUD_CAM_PAST_M = 50,        /* and goes this far after it */
     HUD_CAM_AHEAD_DEG = 30,     /* the camera must lie within this of the heading to count as ahead */
     HUD_CAM_DIR_DEG = 50,       /* the heading within this of the direction the camera watches */
@@ -44,6 +44,7 @@ typedef struct {
     /* private */
     hud_geo_fix last, anchor;   /* anchor: the fix the derived heading is measured from */
     int heading;
+    int show_m;                 /* appears this far before the camera: HUD_CAM_SHOW_M from init, the menu's Warning distance */
 } hud_cam_track;
 
 void hud_cam_track_init(hud_cam_track *t);
@@ -58,9 +59,10 @@ void hud_geo_offset(int32_t lat_a, int32_t lon_a, int32_t lat_b, int32_t lon_b, 
 enum { HUD_CAM_ICON_POLYS = 8, HUD_CAM_ICON_PTS = 64 };
 int hud_cam_icon(int badge, int x, int y, hud_point pts[][HUD_CAM_ICON_PTS], unsigned *npts);
 
-/* The whole picture: the camera in red_ink, a limit sign (ring and digits) and a distance bar in the ink. Draws into the
-   hidden image and switches, as hud_strip_frame does. Returns the calls added, -1 if they would not fit. */
-int hud_cam_frame(hud_batch *b, const hud_palette *pal, uint8_t red_ink, const hud_handles *hh, int limit, int dist_m,
+/* The whole picture: the camera in hud_cam_ink, a limit sign (ring and digits, in pal->cam if set) and a distance bar in
+   the ink, full at show_m. Draws into the hidden image and switches, as hud_strip_frame does. Returns the calls added,
+   -1 if they would not fit. */
+int hud_cam_frame(hud_batch *b, const hud_palette *pal, const hud_handles *hh, int limit, int dist_m, int show_m,
                   int *shown);
 
 #endif

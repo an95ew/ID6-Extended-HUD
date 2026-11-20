@@ -18,7 +18,6 @@ OUT = NATIVE / "out"
 PLUGIN = NATIVE / "plugin"
 LICENSE = NATIVE.parent / "LICENSE"
 THIRD_PARTY = NATIVE.parent / "third-party"
-POLYFORM_NOTICE = THIRD_PARTY / "nbtevo-carplay-advanced-NOTICE"
 IDRIVE7_LICENSE = THIRD_PARTY / "idrive7-apps-LICENSE"
 STAGE = OUT / "ExtendedHUD"
 ZIP_PATH = OUT / "extended-hud.zip"
@@ -46,7 +45,7 @@ for name, types in REQUIRED_BINS.items():
 for name in REQUIRED_CONFIG:
     if not (PLUGIN / name).is_file():
         sys.exit(f"Missing plugin file: {PLUGIN / name}")
-for extra in (LICENSE, POLYFORM_NOTICE, IDRIVE7_LICENSE):
+for extra in (LICENSE, IDRIVE7_LICENSE):
     if not extra.is_file():
         sys.exit(f"Missing license/notice file: {extra}")
 
@@ -77,9 +76,8 @@ readme_text = (
     "Install ExtendedHUD/ into /var/opt/hmi/data/ID5/Plugins/ExtendedHUD/ on the HMI node,\n"
     "mark hud-sportbar-qnx and shift-deck-qnx executable (chmod 755), verify every uploaded\n"
     "file by hash readback, and restart iDrive. Do not install alongside HudTest.\n\n"
-    "Licensing: MIT (LICENSE, LICENSE-idrive7-apps.txt), ISC (Mapbox glyph geometry in\n"
-    "hud-sportbar-qnx), and PolyForm Noncommercial License 1.0.0\n"
-    "(NOTICE-polyform-noncommercial.txt, applies to hud_rg compiled into hud-sportbar-qnx).\n"
+    "Install guide: INSTALL.md in the source repository.\n\n"
+    "Licensing: MIT (LICENSE, LICENSE-idrive7-apps.txt).\n"
 )
 
 sums_lines = []
@@ -100,7 +98,6 @@ with zipfile.ZipFile(ZIP_PATH, "w") as zf:
     write_zip_bytes(zf, "SHA256SUMS", sums_bytes, 0o644)
     write_zip_bytes(zf, "LICENSE", LICENSE.read_bytes(), 0o644)
     write_zip_bytes(zf, "LICENSE-idrive7-apps.txt", IDRIVE7_LICENSE.read_bytes(), 0o644)
-    write_zip_bytes(zf, "NOTICE-polyform-noncommercial.txt", POLYFORM_NOTICE.read_bytes(), 0o644)
     write_zip_bytes(zf, "README.md", readme_text.encode("utf-8"), 0o644)
 
 # Read back and verify every entry in SHA256SUMS.

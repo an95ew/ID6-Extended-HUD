@@ -189,15 +189,15 @@ class CollectorTest(unittest.TestCase):
 
 
 class RepoInvariantsTest(unittest.TestCase):
-    def test_polyform_license_disclosed_and_packaged(self):
-        notice = ROOT / "third-party" / "nbtevo-carplay-advanced-NOTICE"
-        self.assertTrue(notice.is_file(), f"missing {notice}")
-        self.assertIn("PolyForm Noncommercial License 1.0.0", notice.read_text(encoding="utf-8"))
-        readme = (ROOT / "README.md").read_text(encoding="utf-8")
-        self.assertIn("PolyForm Noncommercial License 1.0.0", readme)
-        self.assertIn("hud_rg", readme)
-        pkg_sh = (ROOT / "native" / "package.sh").read_text(encoding="utf-8")
-        self.assertIn("nbtevo-carplay-advanced-NOTICE", pkg_sh)
+    def test_nav_code_stays_on_its_feature_branch(self):
+        # CarPlay navigation (hud_rg is PolyForm Noncommercial, Mapbox glyphs ISC) lives on feature/nav: nothing of it
+        # may be built or shipped from this branch, so the package carries MIT code only.
+        for gone in ("src/hud/hud_rg.c", "src/hud/hud_nav.c", "src/hud/hud_text.c", "src/rghook/rghook.c"):
+            self.assertFalse((ROOT / "native" / gone).exists(), gone)
+        for script in ("Makefile", "build.sh", "build_hud.sh", "package.sh"):
+            text = (ROOT / "native" / script).read_text(encoding="utf-8")
+            for word in ("hud_rg", "hud_nav", "hud_text", "rghook", "polyform", "PolyForm"):
+                self.assertNotIn(word, text, (script, word))
 
     def test_check_app_reserved_connectors_match_known_id6_apps(self):
         check_app_path = ROOT / ".claude" / "skills" / "extendedhud" / "check_app.py"

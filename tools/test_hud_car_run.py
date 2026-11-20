@@ -83,7 +83,7 @@ class CarRunTest(unittest.TestCase):
         self.assertNotIn("--container", worker_args(STEPS["R1"], {"container": "23"}))
         # Run 3 steps on the HUD pair: the container goes to the bars and the draws, the palette to the draws only.
         state = {"inst": "2", "handles": "31,32", "canvas": "120x72", "container": "23", "palette": "3,4,3,5,3,8,4"}
-        for k in ("S0f", "S0l", "S1", "S2"):
+        for k in ("S0f", "S0l", "S1"):
             self.assertEqual(worker_args(STEPS[k], state).count("--container"), 1, k)
         self.assertIn("--palette", worker_args(STEPS["S1"], state))
         self.assertNotIn("--palette", worker_args(STEPS["S0f"], state))

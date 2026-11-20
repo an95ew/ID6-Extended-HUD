@@ -1,7 +1,8 @@
 <?xml version="1.0" encoding="utf-8"?>
 <!-- Layout copied from the packaged HudTest.xml (property 20/21 = x/y, 9/10 = width/height).
-     src/extended_hud.cpp answers actions 21-23 and 31-35 and writes models 50-54. The Shift point page copies ShiftDeck's
-     shift-light page (installed on the car): a label with the current value and one button per value. -->
+     src/extended_hud.cpp answers actions 21, 22, 25, 26, 31-35 and 41-43 and writes models 50-52 and 54-57. The Shift point
+     and Warning distance pages copy ShiftDeck's shift-light page (installed on the car): a label with the current value and
+     one button per value. Ids 23, 53 and 153 were Navigation (now on the feature/nav branch): never reuse them. -->
 <pluginApps>
   <pluginApp applicationType="VehicleInformation" applicationWeight="212" text="ExtendedHUD">
     <entryButton id="1" action="10">
@@ -11,20 +12,27 @@
       <hmiAction id="10" target="100" />
       <raAction id="21" />
       <raAction id="22" />
-      <raAction id="23" />
       <hmiAction id="24" target="101" />
+      <raAction id="25" />
+      <raAction id="26" />
+      <hmiAction id="27" target="102" />
       <raAction id="31" />
       <raAction id="32" />
       <raAction id="33" />
       <raAction id="34" />
       <raAction id="35" />
+      <raAction id="41" />
+      <raAction id="42" />
+      <raAction id="43" />
     </actions>
     <models>
       <raDataModel id="50" modelType="Richtext" />
       <raBoolModel id="51" />
       <raBoolModel id="52" />
-      <raBoolModel id="53" />
       <raDataModel id="54" modelType="Richtext" />
+      <raBoolModel id="55" />
+      <raBoolModel id="56" />
+      <raDataModel id="57" modelType="Richtext" />
     </models>
     <hmiStates>
       <hmiState id="100" text="ExtendedHUD">
@@ -47,15 +55,27 @@
               <property id="9" value="560" /><property id="10" value="60" />
             </properties>
           </checkbox>
-          <checkbox id="153" action="23" model="53" text="Navigation">
-            <properties>
-              <property id="20" value="46" /><property id="21" value="270" />
-              <property id="9" value="460" /><property id="10" value="60" />
-            </properties>
-          </checkbox>
           <button id="154" action="24" text="Shift point">
             <properties>
+              <property id="20" value="96" /><property id="21" value="270" />
+              <property id="9" value="460" /><property id="10" value="60" />
+            </properties>
+          </button>
+          <checkbox id="155" action="25" model="55" text="Display Speed Camera Warning">
+            <properties>
               <property id="20" value="46" /><property id="21" value="335" />
+              <property id="9" value="660" /><property id="10" value="60" />
+            </properties>
+          </checkbox>
+          <checkbox id="156" action="26" model="56" text="Orange camera warning">
+            <properties>
+              <property id="20" value="96" /><property id="21" value="400" />
+              <property id="9" value="560" /><property id="10" value="60" />
+            </properties>
+          </checkbox>
+          <button id="157" action="27" text="Warning distance">
+            <properties>
+              <property id="20" value="96" /><property id="21" value="465" />
               <property id="9" value="460" /><property id="10" value="60" />
             </properties>
           </button>
@@ -69,6 +89,14 @@
           <button id="163" action="33" text="6,400 RPM" />
           <button id="164" action="34" text="6,500 RPM" />
           <button id="165" action="35" text="6,600 RPM" />
+        </components>
+      </hmiState>
+      <hmiState id="102" parentId="100" text="Warning distance">
+        <components>
+          <label id="170" model="57" />
+          <button id="171" action="41" text="300 m" />
+          <button id="172" action="42" text="500 m" />
+          <button id="173" action="43" text="800 m" />
         </components>
       </hmiState>
     </hmiStates>

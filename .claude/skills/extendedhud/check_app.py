@@ -63,10 +63,17 @@ def main():
 
     cpp = (NATIVE / 'src' / 'extended_hud.cpp').read_text()
     const = {k: int(v) for k, v in re.findall(r'\b(k\w+) = (\d+)u', cpp)}
-    want = {'kSportBarAction': ('a', 'raAction'), 'kAlwaysAction': ('a', 'raAction'), 'kNavAction': ('a', 'raAction'),
-            'kSportBarModel': ('m', 'raBoolModel'), 'kAlwaysModel': ('m', 'raBoolModel'), 'kNavModel': ('m', 'raBoolModel'),
-            'kStatusModel': ('m', 'raDataModel'), 'kAlwaysComponent': ('c', 'checkbox'),
-            'kBlinkModel': ('m', 'raDataModel'), 'kBlinkAction': ('a', 'raAction')}
+    want = {'kSportBarAction': ('a', 'raAction'), 'kAlwaysAction': ('a', 'raAction'), 'kCamerasAction': ('a', 'raAction'),
+            'kCamOrangeAction': ('a', 'raAction'),
+            'kSportBarModel': ('m', 'raBoolModel'), 'kAlwaysModel': ('m', 'raBoolModel'), 'kCamerasModel': ('m', 'raBoolModel'),
+            'kCamOrangeModel': ('m', 'raBoolModel'), 'kStatusModel': ('m', 'raDataModel'), 'kAlwaysComponent': ('c', 'checkbox'),
+            'kCamOrangeComponent': ('c', 'checkbox'), 'kCamDistComponent': ('c', 'button'),
+            'kBlinkModel': ('m', 'raDataModel'), 'kBlinkAction': ('a', 'raAction'),
+            'kCamDistModel': ('m', 'raDataModel'), 'kCamDistAction': ('a', 'raAction')}
+    # Navigation's ids (feature/nav branch) stay retired: the car's menu cache may still hold them.
+    for i in (23, 53, 153):
+        if i in ids:
+            problems.append('id %d was Navigation: never reuse it' % i)
     for name, (kind, tag) in want.items():
         if name not in const:
             problems.append('extended_hud.cpp: %s missing' % name)
@@ -78,6 +85,18 @@ def main():
     always = comps.get(const.get('kAlwaysComponent', -1))
     if always is not None and int(always.get('action')) != const.get('kAlwaysAction'):
         problems.append('kAlwaysComponent is not the checkbox of kAlwaysAction')
+    orange = comps.get(const.get('kCamOrangeComponent', -1))
+    if orange is not None and int(orange.get('action')) != const.get('kCamOrangeAction'):
+        problems.append('kCamOrangeComponent is not the checkbox of kCamOrangeAction')
+    # The Warning distance page: three raActions from kCamDistAction, one button each (hud_app_cam_dist_m).
+    for i in range(3):
+        a = const.get('kCamDistAction', -100) + i
+        if a not in actions or actions[a].tag != 'raAction':
+            problems.append('Warning distance: action %d is not an raAction' % a)
+        elif not any(c.tag == 'button' and c.get('action') == str(a) for c in comps.values()):
+            problems.append('Warning distance: no button sends action %d' % a)
+        if 'camDist<%d>' % i not in cpp:
+            problems.append('extended_hud.cpp: no handler camDist<%d>' % i)
     # The Shift point page: five raActions from kBlinkAction, one button each, in menu order (hud_app_blink_rpm).
     for i in range(5):
         a = const.get('kBlinkAction', -100) + i

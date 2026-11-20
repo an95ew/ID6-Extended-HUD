@@ -52,6 +52,7 @@ void hud_cam_track_init(hud_cam_track *t)
     memset(t, 0, sizeof *t);
     t->idx = -1;
     t->heading = t->track_heading = -1;
+    t->show_m = HUD_CAM_SHOW_M;
 }
 
 static int angle_diff(int a, int b)
@@ -72,6 +73,9 @@ static void along_across(const hud_geo_fix *f, int heading, const hud_cam *c, do
 int hud_cam_track_update(hud_cam_track *t, const hud_cam *cams, int n, const hud_geo_fix *fix)
 {
     int was_active = t->active, was_idx = t->idx, was_dist = t->dist_m / 10, i, best = -1;
+    int show = t->show_m > 0 ? t->show_m : HUD_CAM_SHOW_M;
+    /* the near box, the show distance plus ~170 m (500 m: 6000 x 9000 in 1e-6 degrees, ~670 m) */
+    int32_t box_lat = (int32_t)((show + 170) * 1e6 / 111320.0), box_lon = box_lat * 3 / 2;
     double best_along = 0;
     if (!fix->valid) {
         t->last.valid = t->anchor.valid = 0;
@@ -101,7 +105,7 @@ int hud_cam_track_update(hud_cam_track *t, const hud_cam *cams, int n, const hud
         const hud_cam *ac = &cams[t->idx];
         double along, across;
         along_across(fix, t->heading, ac, &along, &across);
-        if (along < -HUD_CAM_PAST_M || along > HUD_CAM_SHOW_M + 100 || fabs(across) > HUD_CAM_SIDE_M ||
+        if (along < -HUD_CAM_PAST_M || along > show + 100 || fabs(across) > HUD_CAM_SIDE_M ||
             (ac->dir >= 0 && angle_diff(t->heading, ac->dir) > HUD_CAM_DIR_KEEP_DEG))
             t->active = 0;
         else t->dist_m = (int)floor(along + 0.5);
@@ -110,10 +114,10 @@ int hud_cam_track_update(hud_cam_track *t, const hud_cam *cams, int n, const hud
         for (i = 0; i < n; i++) {
             const hud_cam *c = &cams[i];
             double along, across;
-            if (abs(c->lat_e6 - fix->lat_e6) > 6000 || abs(c->lon_e6 - fix->lon_e6) > 9000) continue;   /* ~670 m */
+            if (abs(c->lat_e6 - fix->lat_e6) > box_lat || abs(c->lon_e6 - fix->lon_e6) > box_lon) continue;
             if (c->dir >= 0 && angle_diff(t->heading, c->dir) > HUD_CAM_DIR_DEG) continue;   /* the other direction's */
             along_across(fix, t->heading, c, &along, &across);
-            if (along <= 0 || along > HUD_CAM_SHOW_M + 1) continue;   /* 1 m: the e6 rounding */
+            if (along <= 0 || along > show + 1) continue;   /* 1 m: the e6 rounding */
             /* ahead: inside the cone, or close to the line of travel when near (a roadside camera 20 m off at 30 m) */
             if (fabs(across) > along * tan(HUD_CAM_AHEAD_DEG * PI / 180.0) && fabs(across) > 25) continue;
             if (best < 0 || along < best_along) { best = i; best_along = along; }
@@ -222,17 +226,19 @@ static unsigned ring(hud_point *pt, double cx, double cy, double ro, double ri, 
 static int digit_w(int h) { return h * 6 / 11; }
 static int digit_t(int h) { return h / 7 < 2 ? 2 : h / 7; }
 
-int hud_cam_frame(hud_batch *b, const hud_palette *pal, uint8_t red_ink, const hud_handles *hh, int limit, int dist_m,
+int hud_cam_frame(hud_batch *b, const hud_palette *pal, const hud_handles *hh, int limit, int dist_m, int show_m,
                   int *shown)
 {
     unsigned start = b->n, np[HUD_CAM_ICON_POLYS];
     uint16_t h = hh->buf[1 - *shown], id = 1;
     hud_point icon[HUD_CAM_ICON_POLYS][HUD_CAM_ICON_PTS], pt[HUD_CAM_ICON_PTS];
     int i, n = hud_cam_icon(0, 5, 14, icon, np);
-    if (hud_remove_all(b, h) || hud_fill_color(b, h, red_ink)) goto full;
+    if (show_m <= 0) show_m = HUD_CAM_SHOW_M;
+    if (hud_remove_all(b, h) || hud_fill_color(b, h, hud_cam_ink(pal))) goto full;
     for (i = 0; i < n; i++)
         if (hud_polygon(b, h, id++, icon[i], np[i])) goto full;
-    if (hud_fill_color(b, h, pal->ink) || hud_polygon(b, h, id++, pt, ring(pt, 88, 32, 24, 19, 28))) goto full;
+    if (hud_fill_color(b, h, pal->cam ? pal->cam : pal->ink) || hud_polygon(b, h, id++, pt, ring(pt, 88, 32, 24, 19, 28)))
+        goto full;
     if (limit > 0 && limit < 1000) {
         int digits = limit >= 100 ? 3 : limit >= 10 ? 2 : 1, dh = digits > 2 ? 15 : 19, dw = digit_w(dh);
         int gap = digits > 2 ? 1 : 3, total = digits * dw + (digits - 1) * gap, x = 88 + total / 2 - dw, v = limit;
@@ -244,10 +250,11 @@ int hud_cam_frame(hud_batch *b, const hud_palette *pal, uint8_t red_ink, const h
             v /= 10;
         } while (v > 0);
     }
-    if (dist_m > 0) {   /* shrinks from 112 px at 500 m */
-        int w = 112 * (dist_m > HUD_CAM_SHOW_M ? HUD_CAM_SHOW_M : dist_m) / HUD_CAM_SHOW_M;
+    if (dist_m > 0) {   /* shrinks from 112 px at show_m */
+        int w = 112 * (dist_m > show_m ? show_m : dist_m) / show_m;
         hud_point bar[4];
         if (w < 2) w = 2;
+        if (pal->cam && hud_fill_color(b, h, pal->ink)) goto full;   /* the limit was in the camera's colour */
         bar[0].x = 4; bar[0].y = 62; bar[1].x = (int16_t)(4 + w); bar[1].y = 62;
         bar[2].x = (int16_t)(4 + w); bar[2].y = 67; bar[3].x = 4; bar[3].y = 67;
         if (hud_polygon(b, h, id++, bar, 4)) goto full;

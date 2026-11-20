@@ -35,7 +35,10 @@ void hud_palette_default(hud_palette *p)
     p->shift_on = 0;
     p->backs = HUD_BACKS_FILL;
     p->alert = 0;   /* no red found on 82/02 yet (run 3); settings red=N once the car shows one */
+    p->cam = 0;
 }
+
+uint8_t hud_cam_ink(const hud_palette *p) { return p->cam ? p->cam : p->alert ? p->alert : p->ink; }
 
 void hud_geom_default(hud_geom *g)
 {
@@ -50,8 +53,6 @@ void hud_geom_default(hud_geom *g)
     g->gear_cx = 362;
     g->gear_top = 104;
     g->gear_h = 44;
-    g->nav_x0 = 0;
-    g->nav_text_top = 0;
     g->rise = 0;
     g->rpm_x1 = g->rpm_h = g->solid_digits = g->merge_pts = 0;
 }
@@ -74,8 +75,6 @@ void hud_geom_for_canvas(hud_geom *g, int canvas_w, int canvas_h)
     g->gear_cx = (int)lround(d.gear_cx * sx);
     g->gear_top = (int)lround(d.gear_top * sy);
     g->gear_h = (int)lround(d.gear_h * sy);
-    g->nav_x0 = 0;
-    g->nav_text_top = 0;
     g->rise = 0;
     g->rpm_x1 = g->rpm_h = g->solid_digits = g->merge_pts = 0;
 }
@@ -93,7 +92,6 @@ void hud_geom_big(hud_geom *g, int canvas_w, int canvas_h)
     g->gear_cx = canvas_w / 2;
     g->gear_top = g->y + g->h + canvas_h / 18;
     g->gear_h = canvas_h - g->gear_top - 2;
-    g->nav_x0 = 240;   /* the nav design lives in x 244..470 */
     g->rise = g->h / 4;
     g->rpm_x1 = g->rpm_h = g->solid_digits = g->merge_pts = 0;
 }
@@ -427,12 +425,12 @@ int hud_strip_frame(hud_batch *b, const hud_profile *p, const hud_palette *pal, 
         int dh = g->rpm_h, dw = digit_w(dh), gap = dh / 8 < 2 ? 2 : dh / 8, bottom = g->gear_top + g->gear_h;
         int n = hud_cam_icon(1, g->gear_cx + digit_w(g->gear_h) / 2 + 5, bottom - 27, icon, np), x = g->rpm_x1 - dw;
         int v = k.cam_limit;
-        if (emit_pen(&e, pal->alert ? pal->alert : pal->ink)) goto full;
+        if (emit_pen(&e, hud_cam_ink(pal))) goto full;
         for (i = 0; i < n; i++)
             if (emit_flush(&e) || emit_outline(&e, icon[i], np[i])) goto full;
         do {
             int c = hud_digit_poly(v % 10, x, bottom - dh, dw, dh, digit_t(dh), dp);
-            if (emit_pen(&e, pal->ink) || emit_flush(&e) || emit_outline(&e, dp, (unsigned)c)) goto full;
+            if (emit_pen(&e, pal->cam ? pal->cam : pal->ink) || emit_flush(&e) || emit_outline(&e, dp, (unsigned)c)) goto full;
             x -= dw + gap;
             v /= 10;
         } while (v > 0);

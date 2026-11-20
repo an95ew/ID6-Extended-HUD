@@ -26,12 +26,14 @@ const unsigned kDataUpdateMessage = 0x40000003u;
 const unsigned kPollKey = 0x48534252u;   // HSBR, private to this app
 const unsigned kPollMs = 1000u;
 const unsigned kRetryMs[] = {2000u, 5000u, 15000u, 60000u};
-// ExtendedHUD.xml
-const unsigned kStatusModel = 50u, kSportBarModel = 51u, kAlwaysModel = 52u, kNavModel = 53u;
-const unsigned kSportBarAction = 21u, kAlwaysAction = 22u, kNavAction = 23u;
-const unsigned kAlwaysComponent = 152u;
+// ExtendedHUD.xml (23/53/153 were Navigation, now on the feature/nav branch: never reuse them)
+const unsigned kStatusModel = 50u, kSportBarModel = 51u, kAlwaysModel = 52u, kCamerasModel = 55u, kCamOrangeModel = 56u;
+const unsigned kSportBarAction = 21u, kAlwaysAction = 22u, kCamerasAction = 25u, kCamOrangeAction = 26u;
+const unsigned kAlwaysComponent = 152u, kCamOrangeComponent = 156u, kCamDistComponent = 157u;
 // the Shift point page (state 101): label 160 shows model 54, buttons 161-165 send actions 31-35 = 6200..6600 rpm
 const unsigned kBlinkModel = 54u, kBlinkAction = 31u;
+// the Warning distance page (state 102): label 170 shows model 57, buttons 171-173 send actions 41-43 = 300, 500, 800 m
+const unsigned kCamDistModel = 57u, kCamDistAction = 41u;
 const char kLog[] = "/tmp/hud-sportbar.log";
 // CDS probe (hud_cds.h): armed by cds.txt; cds.guard exists from registering until kCdsGuardMs later, so a start that
 // dies in the CDS calls leaves it behind and the next start skips CDS (delete cds.guard over SSH to retry).
@@ -137,12 +139,20 @@ class ExtendedHUD : public bmw::PluginApp {
         // off it. Car 2026-11-18: 2 alone made it unselectable but not grey.
         setProperty(kAlwaysComponent, 1u, bmw::Parcel(set_.sport_bar != 0));
         setProperty(kAlwaysComponent, 2u, bmw::Parcel(set_.sport_bar != 0));
+        // the camera's colour and distance, the same way under Display Speed Camera Warning
+        setProperty(kCamOrangeComponent, 1u, bmw::Parcel(set_.cameras != 0));
+        setProperty(kCamOrangeComponent, 2u, bmw::Parcel(set_.cameras != 0));
+        setProperty(kCamDistComponent, 1u, bmw::Parcel(set_.cameras != 0));
+        setProperty(kCamDistComponent, 2u, bmw::Parcel(set_.cameras != 0));
         updateModel(kSportBarModel, set_.sport_bar ? 1 : 0);
         updateModel(kAlwaysModel, set_.always ? 1 : 0);
-        updateModel(kNavModel, set_.nav ? 1 : 0);
-        char blink[64];
-        hud_app_blink_label(&set_, blink, sizeof blink);
-        updateModel(kBlinkModel, bmw::BasicString<char>(blink));
+        updateModel(kCamerasModel, set_.cameras ? 1 : 0);
+        updateModel(kCamOrangeModel, set_.cam_orange ? 1 : 0);
+        char label[64];
+        hud_app_blink_label(&set_, label, sizeof label);
+        updateModel(kBlinkModel, bmw::BasicString<char>(label));
+        hud_app_cam_dist_label(&set_, label, sizeof label);
+        updateModel(kCamDistModel, bmw::BasicString<char>(label));
     }
     void showStatus() {
         char s[128];
@@ -170,6 +180,11 @@ class ExtendedHUD : public bmw::PluginApp {
     }
     template <int Choice> bool blink(const bmw::Parcel&) {
         hud_app_set_blink(&set_, Choice);
+        apply();
+        return true;
+    }
+    template <int Choice> bool camDist(const bmw::Parcel&) {
+        hud_app_set_cam_dist(&set_, Choice);
         apply();
         return true;
     }
@@ -210,8 +225,10 @@ public:
         addHandler(kSportBarAction, action);
         action.m_exec = &Action::execImpl<ExtendedHUD, &ExtendedHUD::toggle<HUD_APP_ALWAYS> >;
         addHandler(kAlwaysAction, action);
-        action.m_exec = &Action::execImpl<ExtendedHUD, &ExtendedHUD::toggle<HUD_APP_NAV> >;
-        addHandler(kNavAction, action);
+        action.m_exec = &Action::execImpl<ExtendedHUD, &ExtendedHUD::toggle<HUD_APP_CAMERAS> >;
+        addHandler(kCamerasAction, action);
+        action.m_exec = &Action::execImpl<ExtendedHUD, &ExtendedHUD::toggle<HUD_APP_CAM_ORANGE> >;
+        addHandler(kCamOrangeAction, action);
         action.m_exec = &Action::execImpl<ExtendedHUD, &ExtendedHUD::blink<0> >;
         addHandler(kBlinkAction + 0u, action);
         action.m_exec = &Action::execImpl<ExtendedHUD, &ExtendedHUD::blink<1> >;
@@ -222,6 +239,12 @@ public:
         addHandler(kBlinkAction + 3u, action);
         action.m_exec = &Action::execImpl<ExtendedHUD, &ExtendedHUD::blink<4> >;
         addHandler(kBlinkAction + 4u, action);
+        action.m_exec = &Action::execImpl<ExtendedHUD, &ExtendedHUD::camDist<0> >;
+        addHandler(kCamDistAction + 0u, action);
+        action.m_exec = &Action::execImpl<ExtendedHUD, &ExtendedHUD::camDist<1> >;
+        addHandler(kCamDistAction + 1u, action);
+        action.m_exec = &Action::execImpl<ExtendedHUD, &ExtendedHUD::camDist<2> >;
+        addHandler(kCamDistAction + 2u, action);
         close(open(kLog, O_WRONLY | O_CREAT | O_TRUNC, 0644));   // a fresh log per HMI start
         const DiagnosticGateway gateway(HUD_APP_DIR "/gateway-ip.txt");
         strcpy(gateway_, gateway.host());
