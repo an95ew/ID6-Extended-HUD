@@ -13,6 +13,7 @@
 #include <unistd.h>
 #include "hud/hud_strip.h"
 #include <assert.h>
+#include <math.h>
 #include <stdio.h>
 #include <string.h>
 
@@ -1202,6 +1203,97 @@ static void test_cameras(void)
         for (m = 5; m <= 120 && t.active; m += 5) { hud_geo_fix f = fix_at(700, m, 90); hud_cam_track_update(&t, cams, 1, &f); }
         assert(!t.active);
     }
+    /* turning 90 deg onto a side street just 40 m before the camera: drops at once by direction, does not linger */
+    {
+        hud_cam_track t;
+        hud_geo_fix f = fix_at(960, 0, 0);
+        cams[0] = cam_at(1000, 8, 50, 0);
+        hud_cam_track_init(&t);
+        assert(hud_cam_track_update(&t, cams, 1, &f) && t.active);
+        f = fix_at(960, 15, 90);   /* across is 40 m (< 60), along is -7 m (> -50), but heading is 90 deg off dir 0 */
+        assert(hud_cam_track_update(&t, cams, 1, &f) && !t.active);
+    }
+    /* the track's own bearing is kept next to a CDS heading (car run 8 G1 logs both): driving east with a mirrored CDS 270 */
+    {
+        hud_cam_track t;
+        hud_geo_fix f = fix_at(0, 0, 270);
+        hud_cam_track_init(&t);
+        hud_cam_track_update(&t, cams, 0, &f);
+        assert(t.track_heading == -1 && t.heading == 270);
+        f = fix_at(0, 15, 270);
+        hud_cam_track_update(&t, cams, 0, &f);
+        assert(t.track_heading == 90 && t.heading == 270);
+        f = fix_at(0, 30, -1);   /* no CDS heading: the track's */
+        hud_cam_track_update(&t, cams, 0, &f);
+        assert(t.heading == 90);
+        f.valid = 0;
+        hud_cam_track_update(&t, cams, 0, &f);
+        assert(t.track_heading == -1 && t.heading == -1);
+    }
+    /* realistic GPS replay: Kyiv Pivnichnyi Bridge pair (eastbound row 6 = 65 deg vs westbound row 9 = 242 deg),
+       cross-street rejection, curved approach with derived heading, and consecutive cameras */
+    {
+        /* real coordinates and bearings from native/plugin/cameras.txt rows 6 and 9 */
+        hud_cam bridge[3] = {
+            { 50492109, 30540926, 50, 65 },    /* row 6 to left bank (ENE) */
+            { 50492322, 30540826, 50, 242 },   /* row 9 to right bank (WSW) */
+            { 50492109, 30540926, 70, 155 },   /* perpendicular cross-street at same spot */
+        };
+        hud_cam_track t;
+        int step, hit_idx = -1, hit_count = 0, first_d = -9999, last_d = -9999;
+        double rad = 65.0 * 3.14159265358979323846 / 180.0;
+        /* drive eastbound (bearing 65) from 700 m before row 6 to 150 m past, no CDS heading (derived from track) */
+        hud_cam_track_init(&t);
+        for (step = -700; step <= 150; step += 15) {
+            hud_geo_fix f;
+            double e = step * sin(rad), no = step * cos(rad);
+            f.lat_e6 = bridge[0].lat_e6 + (int32_t)(no * 1e6 / 111320.0);
+            f.lon_e6 = bridge[0].lon_e6 + (int32_t)(e * 1e6 / (111320.0 * cos(50.4921 * 3.14159265358979323846 / 180.0)));
+            f.heading = -1;
+            f.valid = 1;
+            hud_cam_track_update(&t, bridge, 3, &f);
+            if (t.active) {
+                if (hit_idx < 0) { hit_idx = t.idx; first_d = t.dist_m; }
+                assert(t.idx == 0);   /* never row 9 (oncoming) and never #2 (cross-street) */
+                last_d = t.dist_m;
+                hit_count++;
+            }
+        }
+        assert(hit_idx == 0 && hit_count > 20 && first_d >= 480 && first_d <= 505 && last_d <= -35 && last_d >= -55);
+        /* drive westbound (bearing 242): only row 9 fires */
+        hit_idx = -1; hit_count = 0;
+        rad = 242.0 * 3.14159265358979323846 / 180.0;
+        hud_cam_track_init(&t);
+        for (step = -700; step <= 150; step += 15) {
+            hud_geo_fix f;
+            double e = step * sin(rad), no = step * cos(rad);
+            f.lat_e6 = bridge[1].lat_e6 + (int32_t)(no * 1e6 / 111320.0);
+            f.lon_e6 = bridge[1].lon_e6 + (int32_t)(e * 1e6 / (111320.0 * cos(50.4923 * 3.14159265358979323846 / 180.0)));
+            f.heading = -1;
+            f.valid = 1;
+            hud_cam_track_update(&t, bridge, 3, &f);
+            if (t.active) {
+                if (hit_idx < 0) hit_idx = t.idx;
+                assert(t.idx == 1);
+                hit_count++;
+            }
+        }
+        assert(hit_idx == 1 && hit_count > 20);
+        /* two consecutive northbound cameras 800 m apart: first shows and clears, then second shows */
+        cams[0] = cam_at(1000, 8, 50, 0);
+        cams[1] = cam_at(1800, 8, 90, 0);
+        {
+            int seen0 = 0, seen1 = 0, m;
+            hud_cam_track_init(&t);
+            for (m = 0; m <= 2000; m += 10) {
+                hud_geo_fix f = fix_at(m, 0, 0);
+                hud_cam_track_update(&t, cams, 2, &f);
+                if (t.active && t.idx == 0) seen0++;
+                if (t.active && t.idx == 1) seen1++;
+            }
+            assert(seen0 > 40 && seen1 > 40);
+        }
+    }
 
     /* the pictures: every call valid, every point on the 120 x 72 canvas, polygons within the 51-point size proven on the car */
     {
@@ -1235,6 +1327,7 @@ static void test_cameras(void)
             assert(polys == 7 + 1 + (limits[j] >= 100 ? 3 : limits[j] >= 10 ? 2 : 1) + (j == 2 ? 0 : 1));
             assert(bt.call[1].fkt == 0x21B && bt.call[1].p[2] == 9);   /* the camera in the red */
             assert(last(&bt)->fkt == 0x20E);
+            assert(overlap_px(&bt, 120, 72) == 0);   /* car run 7: no overlapping polygons on 82/02 */
         }
         printf("camera alert: %d calls a frame\n", (int)bt.n);
     }
@@ -1264,6 +1357,7 @@ static void test_cameras(void)
         an.cam_limit = 110;
         hud_batch_init(&b1);
         assert(hud_strip_frame(&b1, &p, &pal, &g, &hh, &an, &shown) > 0);
+        assert(overlap_px(&b1, 120, 72) == 0);   /* car run 7: no overlapping polygons with camera badge + limit */
         /* 3200 shows four digits, 110 three, plus the badge's five shapes and one pen each way */
         assert(b1.n == b0.n - 4 + 5 + 3 + 2);
         for (i = 0; i < (int)b1.n; i++) if (b1.call[i].fkt == 0x21B && b1.call[i].p[2] == 9) red_pens++;
@@ -1303,6 +1397,15 @@ static void test_cameras(void)
         assert(!hud_cds_json_num("{\"platitude\":1}", "latitude", &v));
         assert(!hud_cds_geo_take(&geo, HUD_CDS_GPS, "{\"GPSPosition\":{\"latitude\":0,\"longitude\":0}}"));
         assert(hud_cds_geo_take(&geo, HUD_CDS_GPS, "{\"GPSPosition\":{\"latitude\":50.479649,\"longitude\":30.453529,\"altitude\":171}}"));
+        /* BMW CDS GPSExtendedInfo.heading is CCW from North (BimmerGestalt/AAIdrive: 90=W -> 270 CW, 270=E -> 90 CW) */
+        assert(hud_cds_geo_take(&geo, HUD_CDS_HEADING, "{\"GPSExtendedInfo\":{\"altitude\":171,\"heading\":90,\"speed\":12}}"));
+        assert(hud_cds_geo_frame(&geo, 5, &gf) && gf.heading == 270);
+        assert(hud_cds_geo_take(&geo, HUD_CDS_HEADING, "{\"GPSExtendedInfo\":{\"altitude\":171,\"heading\":270,\"speed\":12}}"));
+        assert(hud_cds_geo_frame(&geo, 5, &gf) && gf.heading == 90);
+        assert(hud_cds_geo_take(&geo, HUD_CDS_HEADING, "{\"GPSExtendedInfo\":{\"altitude\":171,\"heading\":100,\"speed\":12}}"));
+        assert(hud_cds_geo_frame(&geo, 5, &gf) && gf.heading == 260);
+        assert(hud_cds_geo_take(&geo, HUD_CDS_HEADING, "{\"GPSExtendedInfo\":{\"altitude\":171,\"heading\":180,\"speed\":12}}"));
+        assert(hud_cds_geo_frame(&geo, 5, &gf) && gf.heading == 180);
         assert(hud_cds_geo_take(&geo, HUD_CDS_HEADING, "{\"GPSExtendedInfo\":{\"altitude\":171,\"heading\":359.7,\"speed\":12}}"));
         assert(hud_cds_geo_frame(&geo, 5, &gf) && gf.magic == GEO_MAGIC && gf.lat_e6 == 50479649 && gf.lon_e6 == 30453529);
         assert(gf.heading == 0 && sizeof gf == 40 && sizeof(struct drive_frame) == 32);
@@ -1317,6 +1420,49 @@ static void test_cameras(void)
         hud_settings_default(&st);
         assert(st.cameras == 1 && st.red == 0);
         assert(hud_settings_parse(&st, "cameras=0\nred=9\nred=300\n", 24) == 2 && st.cameras == 0 && st.red == 9);
+    }
+    /* real shipped plugin/cameras.txt: parses all 426 cameras, directed bearings populated, Pivnichnyi Bridge pair fires one-way */
+    {
+        static char buf[64 * 1024];
+        static hud_cam real[HUD_CAM_MAX];
+        FILE *fp = fopen("plugin/cameras.txt", "r");
+        assert(fp != NULL);
+        {
+            size_t len = fread(buf, 1, sizeof buf, fp);
+            int nr = hud_cams_parse(buf, len, real, HUD_CAM_MAX), directed = 0, lines = 0, i;
+            hud_cam_track t;
+            int step, seen5 = 0, seen8 = 0;
+            double rad = 65.0 * 3.14159265358979323846 / 180.0;
+            fclose(fp);
+            for (i = 0; i < (int)len; i++)   /* every data line parses (426 on 2026-11-19; the police list grows) */
+                if ((i == 0 || buf[i - 1] == '\n') && buf[i] != '#' && buf[i] != '\n') lines++;
+            assert(len < sizeof buf && nr == lines && nr >= 426);
+            for (i = 0; i < nr; i++) {
+                assert(real[i].lat_e6 > 44000000 && real[i].lat_e6 < 53000000);
+                assert(real[i].lon_e6 > 22000000 && real[i].lon_e6 < 41000000);
+                assert(real[i].limit >= 50 && real[i].limit <= 110);
+                if (real[i].dir >= 0) directed++;
+            }
+            assert(directed * 10 >= nr * 8);   /* 376 of 426 on 2026-11-19 */
+            /* row 6 (idx 5) = Pivnichnyi Bridge eastbound (~65 deg), row 9 (idx 8) = westbound (~242 deg) */
+            assert(real[5].dir >= 55 && real[5].dir <= 75 && real[8].dir >= 232 && real[8].dir <= 252);
+            hud_cam_track_init(&t);
+            for (step = -650; step <= 120; step += 15) {
+                hud_geo_fix f;
+                double e = step * sin(rad), no = step * cos(rad);
+                f.lat_e6 = real[5].lat_e6 + (int32_t)(no * 1e6 / 111320.0);
+                f.lon_e6 = real[5].lon_e6 + (int32_t)(e * 1e6 / (111320.0 * cos(50.4921 * 3.14159265358979323846 / 180.0)));
+                f.heading = 65;
+                f.valid = 1;
+                hud_cam_track_update(&t, real, nr, &f);
+                if (t.active) {
+                    if (t.idx == 5) seen5++;
+                    if (t.idx == 8) seen8++;
+                }
+            }
+            assert(seen5 > 25 && seen8 == 0);
+            printf("real cameras.txt: %d parsed, %d directed\n", nr, directed);
+        }
     }
 }
 

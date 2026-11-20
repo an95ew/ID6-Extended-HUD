@@ -51,7 +51,7 @@ void hud_cam_track_init(hud_cam_track *t)
 {
     memset(t, 0, sizeof *t);
     t->idx = -1;
-    t->heading = -1;
+    t->heading = t->track_heading = -1;
 }
 
 static int angle_diff(int a, int b)
@@ -75,21 +75,22 @@ int hud_cam_track_update(hud_cam_track *t, const hud_cam *cams, int n, const hud
     double best_along = 0;
     if (!fix->valid) {
         t->last.valid = t->anchor.valid = 0;
-        t->heading = -1;
+        t->heading = t->track_heading = -1;
         t->active = 0;
         t->idx = -1;
         return was_active;
     }
-    if (fix->heading >= 0) t->heading = fix->heading % 360;
-    else if (!t->anchor.valid) t->anchor = *fix;
+    if (!t->anchor.valid) t->anchor = *fix;   /* the track's own bearing, kept even with a CDS heading (car run 8 G1) */
     else {
         double e, no;
         hud_geo_offset(t->anchor.lat_e6, t->anchor.lon_e6, fix->lat_e6, fix->lon_e6, &e, &no);
         if (e * e + no * no >= (double)HUD_CAM_HEADING_MOVE_M * HUD_CAM_HEADING_MOVE_M) {
-            t->heading = ((int)floor(atan2(e, no) * 180.0 / PI + 0.5) + 360) % 360;
+            t->track_heading = ((int)floor(atan2(e, no) * 180.0 / PI + 0.5) + 360) % 360;
             t->anchor = *fix;
         }
     }
+    if (fix->heading >= 0) t->heading = fix->heading % 360;
+    else if (t->track_heading >= 0) t->heading = t->track_heading;
     t->last = *fix;
     if (t->heading < 0) {
         t->active = 0;
@@ -97,9 +98,12 @@ int hud_cam_track_update(hud_cam_track *t, const hud_cam *cams, int n, const hud
         return was_active;
     }
     if (t->active) {   /* keep it until 50 m past, or until we leave its road */
+        const hud_cam *ac = &cams[t->idx];
         double along, across;
-        along_across(fix, t->heading, &cams[t->idx], &along, &across);
-        if (along < -HUD_CAM_PAST_M || along > HUD_CAM_SHOW_M + 100 || fabs(across) > HUD_CAM_SIDE_M) t->active = 0;
+        along_across(fix, t->heading, ac, &along, &across);
+        if (along < -HUD_CAM_PAST_M || along > HUD_CAM_SHOW_M + 100 || fabs(across) > HUD_CAM_SIDE_M ||
+            (ac->dir >= 0 && angle_diff(t->heading, ac->dir) > HUD_CAM_DIR_KEEP_DEG))
+            t->active = 0;
         else t->dist_m = (int)floor(along + 0.5);
     }
     if (!t->active) {

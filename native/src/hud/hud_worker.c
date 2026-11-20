@@ -712,7 +712,7 @@ static int run_car(void)
     struct geo_frame geo;
     hud_palette pal_base = o.pal;
     int ncam = 0, cam_key = -1, cam_logged = -1;
-    uint32_t geo_at = 0, next_cam = 0;
+    uint32_t geo_at = 0, next_cam = 0, next_heading_log = 0;
     hud_most_set_instance((uint8_t)o.most_inst);
     rc = hud_most_open(5000);
     if (rc != HUD_MOST_UP) {
@@ -925,6 +925,11 @@ static int run_car(void)
                         cam_logged = trk.active ? trk.idx : -1;
                         fprintf(stderr, "[hud] camera %s: #%d %d m, limit %d, heading %d\n", trk.active ? "ahead" : "none",
                                 trk.idx, trk.dist_m, trk.limit, trk.heading);
+                    }
+                    if (fx.valid && trk.track_heading >= 0 && (int32_t)(t - next_heading_log) >= 0) {
+                        /* car run 8 G1: the CDS heading (after the CCW -> CW turn in hud_cds.c) against the GPS track */
+                        fprintf(stderr, "[hud] heading: cds %d, track %d\n", fx.heading, trk.track_heading);
+                        next_heading_log = t + 5000;
                     }
                     next_cam = t + 200;
                 }

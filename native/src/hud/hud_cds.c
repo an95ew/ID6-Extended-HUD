@@ -115,7 +115,10 @@ int hud_cds_geo_take(hud_cds_geo *g, hud_cds_kind kind, const char *text)
         return 1;
     }
     if (kind == HUD_CDS_HEADING && hud_cds_json_num(text, "heading", &a) && a >= 0 && a < 360.5) {
-        g->heading = (int)floor(a + 0.5) % 360;
+        /* BMW CDS navigation.GPSExtendedInfo.heading counts counter-clockwise from North (0=N, 90=W, 180=S, 270=E;
+           BimmerGestalt/AAIdrive CDSMetrics.kt / CarLocationProvider.kt). Invert to clockwise compass degrees. */
+        int ccw = (int)floor(a + 0.5) % 360;
+        g->heading = (360 - ccw) % 360;
         return 1;
     }
     return 0;

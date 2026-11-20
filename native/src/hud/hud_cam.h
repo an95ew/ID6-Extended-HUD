@@ -16,6 +16,7 @@ enum {
     HUD_CAM_PAST_M = 50,        /* and goes this far after it */
     HUD_CAM_AHEAD_DEG = 30,     /* the camera must lie within this of the heading to count as ahead */
     HUD_CAM_DIR_DEG = 50,       /* the heading within this of the direction the camera watches */
+    HUD_CAM_DIR_KEEP_DEG = 70,  /* once active, drop at once if we turn past this off the camera's direction */
     HUD_CAM_SIDE_M = 60,        /* farther off the line of travel than this: not on our road, or we turned off */
     HUD_CAM_HEADING_MOVE_M = 12 /* without a CDS heading, take it from two fixes at least this far apart */
 };
@@ -39,6 +40,7 @@ typedef struct {
     int active, idx;            /* the camera shown, while active */
     int dist_m;                 /* to the camera along the heading; negative once passed */
     int limit;
+    int track_heading;          /* from two fixes >= HUD_CAM_HEADING_MOVE_M apart, -1 until moved: checks the CDS heading */
     /* private */
     hud_geo_fix last, anchor;   /* anchor: the fix the derived heading is measured from */
     int heading;

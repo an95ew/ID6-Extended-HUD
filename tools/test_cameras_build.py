@@ -13,13 +13,19 @@ def at(north, east):
 
 
 def way(points, **tags):
-    return {"type": "way", "tags": dict(highway="primary", **tags), "geometry": [at(n, e) for n, e in points]}
+    return {"type": "way", "tags": {"highway": "primary", **tags}, "geometry": [at(n, e) for n, e in points]}
 
 
 def cam(north, east, limit=50):
     p = at(north, east)
     p["limit"] = limit
     return p
+
+
+def osm_cam(north, east, direction, **tags):
+    p = at(north, east)
+    return {"type": "node", "id": int(abs(north * 1000 + east * 10)) + 1, "lat": p["lat"], "lon": p["lon"],
+            "tags": dict(highway="speed_camera", direction=direction, **tags)}
 
 
 class CamerasBuildTest(unittest.TestCase):
@@ -52,6 +58,58 @@ class CamerasBuildTest(unittest.TestCase):
         self.assertEqual(dirs[4], 180)
         self.assertEqual(dirs[5], -1)
         self.assertEqual(directions(rows, [])[0], [-1] * len(rows))      # no OSM: all unknown, shown both ways
+
+    def test_directions_osm_cameras_and_edge_cases(self):
+        # 1. Non-drivable ways (footway/service) must not hijack a camera on a primary road.
+        main_n = way([(-200, 0), (0, 0), (200, 0)], highway="primary")
+        sidewalk = way([(-200, 7), (200, 7)], highway="footway")
+        side_res = way([(0, 0), (0, 100)], highway="residential")          # side street 3 m away vs primary 8 m away
+        dirs, _ = directions([cam(3, 8)], [main_n, sidewalk, side_res])
+        self.assertEqual(dirs[0], 0)
+
+        # 2. Anti-parallel OSM segments of one two-way road: pair still splits into opposite directions.
+        seg_n = way([(-200, 0), (0, 0)], highway="primary")                # drawn north (0)
+        seg_s = way([(200, 0), (0, 0)], highway="primary")                 # drawn south (180)
+        dirs, _ = directions([cam(-20, 6), cam(20, -6)], [seg_n, seg_s])
+        self.assertEqual(dirs, [0, 180])
+
+        # 3. OSM highway=speed_camera forward/backward overrides opposite-side pole; direction=both -> -1;
+        #    numeric direction (ambiguous lens azimuth) falls through to one-way carriageway.
+        tw = way([(-200, 0), (0, 0), (50, 0), (200, 0)], highway="primary")
+        ow = way([(-200, 500), (0, 500), (200, 500)], highway="trunk", oneway="yes")
+        elems = [
+            tw, ow,
+            osm_cam(0, 0, "backward"),     # road runs north (0), camera controls southbound (180), even if pole is on east (+6m)
+            osm_cam(50, 0, "both"),        # explicitly bidirectional -> -1 even if pole is on east (+6m)
+            osm_cam(0, 500, "180"),        # numeric lens azimuth on northbound one-way -> must keep one-way 0
+        ]
+        dirs, _ = directions([cam(0, 6), cam(50, 6), cam(0, 505)], elems)
+        self.assertEqual(dirs, [180, -1, 0])
+
+        # 4. 1-to-1 greedy matching: two nearby police rows do not both take the same OSM speed_camera node.
+        ow_n = way([(-200, 0), (0, 0), (200, 0)], highway="trunk", oneway="yes")
+        ow_s = way([(200, -12), (0, -12), (-200, -12)], highway="trunk", oneway="yes")
+        elems = [ow_n, ow_s, osm_cam(0, 0, "forward"), osm_cam(0, -12, "forward")]
+        # Both rows sit slightly closer to the median (x=-4 and x=-8): 1-to-1 assigns one to 0 and one to 180.
+        dirs, _ = directions([cam(0, -4), cam(0, -8)], elems)
+        self.assertEqual(dirs, [0, 180])
+
+        # 5. Identical-coordinate median pair on a divided highway splits into opposite directions.
+        dirs, stats = directions([cam(0, -5), cam(0, -5)], [ow_n, ow_s])
+        self.assertEqual(sorted(dirs), [0, 180])
+        self.assertEqual(sum(stats.values()), 2)
+
+    def test_pair_completion(self):
+        # A camera 33 m off the fetched road (unknown) next to a directed one-way camera: the opposite way.
+        ow = way([(-200, 0), (200, 0)], highway="primary", oneway="yes")
+        dirs, stats = directions([cam(0, 3), cam(60, 33)], [ow])
+        self.assertEqual(dirs, [0, 180])
+        self.assertEqual(stats["pair completion"], 1)
+        # OSM direction=both stays both ways; a lone unknown camera stays unknown.
+        dirs, _ = directions([cam(0, 3), cam(50, 3)], [ow, osm_cam(50, 0, "both")])
+        self.assertEqual(dirs, [0, -1])
+        dirs, _ = directions([cam(0, 33)], [ow])
+        self.assertEqual(dirs, [-1])
 
     def test_car_steps(self):
         k = worker_args(STEPS["K1"], {"handles": "31,32", "canvas": "120x72", "container": "23", "inst": "2", "red": "9"})
