@@ -994,7 +994,7 @@ static void test_cameras(void)
     hud_cam cams[8];
     int n, a, b, d;
     const char *txt = "# lat lon limit dir\n50.479648646 30.453529090 50 123\n  50.4 30.5 110 -1\nbad line\n91 30 50 0\n"
-                      "50.5 30.6 70\n50.5 30.6 70 360\n";
+                      "50.5 30.6 70\n50.5 30.6 70 360\nnan 30.6 70 0\n50.5 inf 70 0\n";
     n = hud_cams_parse(txt, strlen(txt), cams, 8);
     assert(n == 3);
     assert(cams[0].lat_e6 == 50479649 && cams[0].lon_e6 == 30453529 && cams[0].limit == 50 && cams[0].dir == 123);
@@ -1038,11 +1038,39 @@ static void test_cameras(void)
     cams[0] = cam_at(300, 200, 50, -1);
     drive_north(cams, 1, 0, 1200, 0, 700, &a, &b);
     assert(a == -9999);
+    /* a parallel road 250 m to the side: inside the 30 deg cone from 450 m on, but never ours (review 2026-11-21) */
+    cams[0] = cam_at(1000, 250, 50, -1);
+    g_show_m = 800;
+    drive_north(cams, 1, 0, 1200, 0, 700, &a, &b);
+    assert(a == -9999);
+    /* 55 m off at 100 m ahead loses to the one on our road at 120 m: the nearest, not the least along */
+    {
+        hud_cam_track t;
+        hud_geo_fix f = fix_at(900, 0, 0);
+        cams[0] = cam_at(1000, 55, 50, -1);
+        cams[1] = cam_at(1020, 5, 70, -1);
+        hud_cam_track_init(&t);
+        assert(hud_cam_track_update(&t, cams, 2, &f) && t.active && t.idx == 1);
+    }
+    g_show_m = 0;
+    /* car run 9: the fix jumps 77 m sideways for a second 80 m before the camera; the alert stays and comes back right */
+    {
+        hud_cam_track t;
+        int m;
+        cams[0] = cam_at(1000, 8, 50, 0);
+        hud_cam_track_init(&t);
+        for (m = 0; m <= 920; m += 5) { hud_geo_fix f = fix_at(m, 0, 0); hud_cam_track_update(&t, cams, 1, &f); }
+        assert(t.active);
+        { hud_geo_fix f = fix_at(925, 77, 0); hud_cam_track_update(&t, cams, 1, &f); }
+        assert(t.active && t.idx == 0);
+        { hud_geo_fix f = fix_at(930, 0, 0); hud_cam_track_update(&t, cams, 1, &f); }
+        assert(t.active && t.dist_m >= 69 && t.dist_m <= 71);
+    }
     /* no heading from CDS: the track gives one after 12 m */
     cams[0] = cam_at(1000, 8, 50, 0);
     drive_north(cams, 1, 0, 1200, -1, 700, &a, &b);
     assert(a == 500 && b == 1050);
-    /* turning off before the camera: the alert ends once we are 60 m off its line */
+    /* turning off before the camera: the alert ends (by direction, before it is 100 m off its line) */
     {
         hud_cam_track t;
         int m;

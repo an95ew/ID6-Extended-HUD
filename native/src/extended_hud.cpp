@@ -42,7 +42,7 @@ const char kLog[] = "/tmp/hud-sportbar.log";
 const char kCdsConfig[] = HUD_APP_DIR "/cds.txt";
 const char kCdsGuard[] = HUD_APP_DIR "/cds.guard";
 const char kCdsLog[] = "/tmp/hud-cds.log";
-const unsigned kCdsStartMs = 5000u, kCdsGuardMs = 30000u, kCdsMaxLines = 20000u;
+const unsigned kCdsStartMs = 5000u, kCdsGuardMs = 30000u, kCdsMaxLines = 20000u, kGeoFreshMs = 2500u;
 }
 
 class ExtendedHUD;
@@ -68,7 +68,7 @@ class ExtendedHUD : public bmw::PluginApp {
     uint64_t cdsSentAt_[HUD_CDS_MAX];
     int ncds_, cdsSock_;
     hud_cds_geo geo_;                   // the car's position for the camera alert (kinds gps, heading)
-    uint64_t geoSentAt_;
+    uint64_t geoSentAt_, geoAt_;   // geoAt_: the last real CDS GPS update
     bool cdsArmed_, cdsOn_, cdsGuard_;
     uint64_t cdsStartAt_, cdsGuardUntil_;
     unsigned cdsLines_;
@@ -200,7 +200,7 @@ public:
     ExtendedHUD(bmw::IDispatcher& d, bmw::BasicString<char> name, unsigned maj, unsigned mn,
                 bmw::RHMIInterfaceVersion rhmi, const bmw::Bundle& cfg, const bmw::Bundle& res)
         : bmw::PluginApp(d, name, maj, mn, rhmi, cfg, res), worker_(-1), stopping_(false), generation_(0),
-          restarts_(0), retry_at_(0), conflict_(0), ncds_(0), cdsSock_(-1), geoSentAt_(0), cdsArmed_(false), cdsOn_(false),
+          restarts_(0), retry_at_(0), conflict_(0), ncds_(0), cdsSock_(-1), geoSentAt_(0), geoAt_(0), cdsArmed_(false), cdsOn_(false),
           cdsGuard_(false), cdsStartAt_(0), cdsGuardUntil_(0), cdsLines_(0) {
         hud_app_defaults(&set_);
         status_[0] = 0;
@@ -256,6 +256,8 @@ public:
         const DiagnosticGateway gateway(HUD_APP_DIR "/gateway-ip.txt");
         strcpy(gateway_, gateway.host());
         hud_app_load(&set_, HUD_APP_DIR);
+        // a fresh install has no settings.txt, and the worker's own defaults differ (always 0): write the menu's
+        if (access(HUD_APP_DIR "/settings.txt", F_OK) != 0) hud_app_save(&set_, HUD_APP_DIR);
         conflict_ = hud_app_conflict(HUD_APP_PLUGINS);
         cdsArm();
         startWorker();
@@ -304,7 +306,9 @@ private:
         // worker drops data older than 2 s, so each routed value is repeated: unchanged is still the car's value.
         for (int i = 0; cdsOn_ && i < ncds_; ++i)
             if (cds_[i].kind != HUD_CDS_LOG && cdsLast_[i] >= 0 && now - cdsSentAt_[i] >= 500u) cdsSend(i, cdsLast_[i], now);
-        if (cdsOn_ && geo_.have_pos && now - geoSentAt_ >= 500u) geoSend(now);   // parked, the position does not change
+        // GPS comes at 1 Hz (car run 9): repeat it only while it is fresh, so the worker's stale check can end an alert
+        // when the GPS goes quiet (a tunnel) instead of keeping the last camera distance on the HUD
+        if (cdsOn_ && geo_.have_pos && now - geoAt_ < kGeoFreshMs && now - geoSentAt_ >= 500u) geoSend(now);
         if (cdsGuard_ && now >= cdsGuardUntil_) {
             remove(kCdsGuard);
             cdsGuard_ = false;
@@ -347,6 +351,10 @@ private:
             cdsRemovePropertyChangedEventHandler(name);
         }
         cdsOn_ = false;
+        if (cdsGuard_) {   // a clean stop is not the crash the guard is for: the next start may register again
+            remove(kCdsGuard);
+            cdsGuard_ = false;
+        }
         if (cdsSock_ >= 0) close(cdsSock_);
         cdsSock_ = -1;
     }
@@ -372,7 +380,10 @@ private:
         hud_cds_value(value.data(), HUD_CDS_TEXT, text, sizeof text, &number);
         cdsLog("value", cds_[i].name, value);
         if (cds_[i].kind == HUD_CDS_GPS || cds_[i].kind == HUD_CDS_HEADING) {
-            if (hud_cds_geo_take(&geo_, cds_[i].kind, text)) geoSend(bd_mono_ms());
+            if (hud_cds_geo_take(&geo_, cds_[i].kind, text)) {
+                geoAt_ = bd_mono_ms();
+                geoSend(geoAt_);
+            }
             return true;
         }
         if (cds_[i].kind != HUD_CDS_LOG) cdsLast_[i] = number;

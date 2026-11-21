@@ -17,7 +17,8 @@ enum {
     HUD_CAM_AHEAD_DEG = 30,     /* the camera must lie within this of the heading to count as ahead */
     HUD_CAM_DIR_DEG = 50,       /* the heading within this of the direction the camera watches */
     HUD_CAM_DIR_KEEP_DEG = 70,  /* once active, drop at once if we turn past this off the camera's direction */
-    HUD_CAM_SIDE_M = 60,        /* farther off the line of travel than this: not on our road, or we turned off */
+    HUD_CAM_SIDE_M = 60,        /* a new camera this far off the line of travel at most: the cone alone is ~460 m wide at 800 m */
+    HUD_CAM_KEEP_SIDE_M = 100,  /* the shown one is dropped farther off than this: over the 48-77 m GPS jumps of car run 9 */
     HUD_CAM_HEADING_MOVE_M = 12 /* without a CDS heading, take it from two fixes at least this far apart */
 };
 
