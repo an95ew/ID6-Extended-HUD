@@ -31,6 +31,7 @@ int hud_cams_parse(const char *text, size_t len, hud_cam *out, int max)
         if (e == p) continue;
         dir = strtol(p = e, &e, 10);
         if (e == p) dir = -1;
+        if (!isfinite(lat) || !isfinite(lon)) continue;   /* strtod takes "nan" and "inf" */
         if (lat < -90 || lat > 90 || lon < -180 || lon > 180 || limit < 0 || limit > 250 || dir < -1 || dir > 359) continue;
         out[n].lat_e6 = (int32_t)floor(lat * 1e6 + 0.5);
         out[n].lon_e6 = (int32_t)floor(lon * 1e6 + 0.5);
@@ -76,7 +77,7 @@ int hud_cam_track_update(hud_cam_track *t, const hud_cam *cams, int n, const hud
     int show = t->show_m > 0 ? t->show_m : HUD_CAM_SHOW_M;
     /* the near box, the show distance plus ~170 m (500 m: 6000 x 9000 in 1e-6 degrees, ~670 m) */
     int32_t box_lat = (int32_t)((show + 170) * 1e6 / 111320.0), box_lon = box_lat * 3 / 2;
-    double best_along = 0;
+    double best_along = 0, best_score = 0;
     if (!fix->valid) {
         t->last.valid = t->anchor.valid = 0;
         t->heading = t->track_heading = -1;
@@ -105,7 +106,7 @@ int hud_cam_track_update(hud_cam_track *t, const hud_cam *cams, int n, const hud
         const hud_cam *ac = &cams[t->idx];
         double along, across;
         along_across(fix, t->heading, ac, &along, &across);
-        if (along < -HUD_CAM_PAST_M || along > show + 100 || fabs(across) > HUD_CAM_SIDE_M ||
+        if (along < -HUD_CAM_PAST_M || along > show + 100 || fabs(across) > HUD_CAM_KEEP_SIDE_M ||
             (ac->dir >= 0 && angle_diff(t->heading, ac->dir) > HUD_CAM_DIR_KEEP_DEG))
             t->active = 0;
         else t->dist_m = (int)floor(along + 0.5);
@@ -120,7 +121,13 @@ int hud_cam_track_update(hud_cam_track *t, const hud_cam *cams, int n, const hud
             if (along <= 0 || along > show + 1) continue;   /* 1 m: the e6 rounding */
             /* ahead: inside the cone, or close to the line of travel when near (a roadside camera 20 m off at 30 m) */
             if (fabs(across) > along * tan(HUD_CAM_AHEAD_DEG * PI / 180.0) && fabs(across) > 25) continue;
-            if (best < 0 || along < best_along) { best = i; best_along = along; }
+            if (fabs(across) > HUD_CAM_SIDE_M) continue;   /* far ahead the cone takes in the parallel roads */
+            /* the nearest to our road: a camera 55 m off at 100 m loses to one on the road at 120 m */
+            if (best < 0 || along + 2 * fabs(across) < best_score) {
+                best = i;
+                best_along = along;
+                best_score = along + 2 * fabs(across);
+            }
         }
         if (best >= 0) {
             t->active = 1;
